@@ -18,8 +18,23 @@ hr()  { echo ""; echo "───────────────────
 hdr() { hr; echo " $*"; hr; }
 ok()  { echo "  ✓ $*"; }
 err() { echo "  ✗ $*"; }
-ask() { printf "  %s: " "$1"; read -r "$2"; }
-askp() { printf "  %s: " "$1"; read -rs "$2"; echo ""; }
+ask() { printf "  %s: " "$1"; read -r "$2"; if [ -t 0 ]; then while read -r -t 0.05 _drain; do :; done; fi; }
+askp() { printf "  %s: " "$1"; read -rs "$2"; echo ""; if [ -t 0 ]; then while read -r -t 0.05 _drain; do :; done; fi; }
+
+# Invoke the user-selected AI generation tool with a prompt
+ai_run_prompt() {
+  local _prompt="$1"
+  local _base
+  _base=$(echo "$GEN_TOOL" | awk '{print $1}')
+  case "$_base" in
+    claude)  claude --print "$_prompt" 2>/dev/null ;;
+    codex)   codex "$_prompt" 2>/dev/null ;;
+    gemini)  gemini "$_prompt" 2>/dev/null ;;
+    qwen)    qwen "$_prompt" 2>/dev/null ;;
+    kimi)    kimi "$_prompt" 2>/dev/null ;;
+    *)       $GEN_TOOL "$_prompt" 2>/dev/null ;;
+  esac
+}
 
 # ── Banner ────────────────────────────────────────────────────────────────────
 clear
@@ -65,279 +80,284 @@ if [ -f "$PROJECT_PATH/GOAL.md" ]; then
   [[ "$GOAL_ACTION_CHOICE" == "2" ]] && GOAL_ACTION="create" || GOAL_ACTION="keep"
 fi
 
+# ── Detect AI CLI for GOAL generation ────────────────────────────────────────
+echo ""
+echo "  Which AI CLI tool should generate GOAL.md and score.sh?"
+echo ""
+
+_avail=()
+for _t in claude codex gemini qwen kimi; do
+  command -v "$_t" &>/dev/null && _avail+=("$_t ✓") || true
+done
+if [ ${#_avail[@]} -gt 0 ]; then
+  echo "  Detected on PATH: ${_avail[*]}"
+else
+  echo "  No known AI CLI tools detected on PATH."
+fi
+echo ""
+echo "  1) claude   2) codex   3) gemini   4) qwen   5) kimi"
+echo "  6) custom   (you specify the command prefix)"
+echo "  7) skip     (use template, edit manually)"
+echo ""
+ask "Choice [1-7]" _GEN_CHOICE
+
+case "$_GEN_CHOICE" in
+  1) GEN_TOOL="claude" ;;
+  2) GEN_TOOL="codex" ;;
+  3) GEN_TOOL="gemini" ;;
+  4) GEN_TOOL="qwen" ;;
+  5) GEN_TOOL="kimi" ;;
+  6) ask "Command prefix (prompt appended as last arg, e.g. 'mycli --print')" GEN_TOOL ;;
+  *) GEN_TOOL="skip" ;;
+esac
+
+if [ "$GEN_TOOL" != "skip" ]; then
+  _base=$(echo "$GEN_TOOL" | awk '{print $1}')
+  if ! command -v "$_base" &>/dev/null; then
+    err "$GEN_TOOL not found on PATH — will use template fallback"
+    GEN_TOOL="skip"
+  else
+    ok "Using $GEN_TOOL for generation"
+  fi
+fi
+
 if [ "$GOAL_ACTION" = "create" ]; then
   echo ""
-  echo "  How would you like to define the goal?"
+  echo "  Paste your goal / analysis below (or just press Enter to let AI analyze the project)."
+  echo "  Enter a blank line when done."
   echo ""
-  echo "  1) AI-assisted  — claude analyzes the project and generates GOAL.md + score.sh"
-  echo "  2) Questionnaire — answer a few questions to build GOAL.md step by step"
+  printf "  Goal context (blank line to finish):\n"
+
+  USER_CONTEXT=""
+  while IFS= read -r _ctx_line || true; do
+    [[ -z "$_ctx_line" ]] && break
+    USER_CONTEXT="${USER_CONTEXT}${_ctx_line}"$'\n'
+  done
+
   echo ""
-  ask "Choice [1-2]" GOAL_METHOD
 
-  case "$GOAL_METHOD" in
-    1)
-      # ── AI-assisted GOAL.md generation ────────────────────────────────────
-      echo ""
-      echo "  Scanning project at: $PROJECT_PATH"
-      echo "  Running claude to analyze and generate GOAL.md + score.sh ..."
-      echo ""
+  # ── AI-assisted generation (primary path) ────────────────────────────────
+  AI_GENERATED=false
+  if [ "$GEN_TOOL" != "skip" ]; then
+    echo "  Analyzing project via $GEN_TOOL — generating GOAL.md + score.sh ..."
+    echo ""
 
-      if ! command -v claude &>/dev/null; then
-        err "claude CLI not found on PATH — falling back to questionnaire"
-        GOAL_METHOD="2"
-      else
-        AI_PROMPT="You are setting up a hephaestus Worker-Reviewer loop for a software project.
+    _ctx_section=""
+    if [ -n "$USER_CONTEXT" ]; then
+      _ctx_section="The user has provided the following goal/analysis as context. Use it to drive the fitness function, action catalog, and scoring logic — do not ignore it:
+
+${USER_CONTEXT}
+---
+"
+    fi
+
+    AI_PROMPT=$(cat << AIPROMPT_EOF
+IMPORTANT: This is a plain-text generation task. Do NOT write any files. Do NOT use any tools. Your entire response must be raw text only.
+
+You are generating configuration for a hephaestus Worker-Reviewer loop.
 
 Project directory: ${PROJECT_PATH}
 
-Analyze the project and generate two files:
+${_ctx_section}Read the project files at that directory to understand its language, test runner, linter, and coverage tools. Then respond with ONLY the two file contents below — no preamble, no explanation, no tool calls.
 
-1. GOAL.md — following the goal-md 5-element format:
-   - Fitness Function (bash command that outputs a score 0-100)
-   - Operating Mode: Converge, stopping conditions
-   - Improvement Loop (step-by-step)
-   - Action Catalog (table with Impact and How columns)
-   - Constraints
-   - Bootstrap section
-   - File Map
-   - When to Stop report template
-
-2. score.sh — a bash script that:
-   - Outputs a single integer 0-100 to stdout
-   - Supports --json flag returning {\"score\":N,...}
-   - Uses whatever test/lint/coverage tools the project has
-   - Writes breakdown to stderr
-
-Output ONLY these two files. Use the format:
 === GOAL.md ===
-<content>
+A GOAL.md tailored to this specific project with:
+- Fitness function grounded in what this project actually measures
+- Concrete stopping conditions and target score
+- Improvement Loop (step-by-step)
+- Action Catalog with specific actionable items for this project's actual gaps
+- Constraints from the project's actual requirements
+
 === score.sh ===
-<content>
+A bash script that:
+- Starts with #!/usr/bin/env bash
+- Outputs a single integer 0-100 to stdout
+- Accepts --json flag returning {"score":N,"tests":N,"lint":N,"coverage":N}
+- Uses the ACTUAL commands for this project (detect from pyproject.toml / package.json / Makefile / setup.cfg)
+- Writes score breakdown to stderr
+- Contains only real executable commands, never placeholder echo statements
 
-Do not include any other text."
+Respond now with only the two sections above, starting with the line: === GOAL.md ===
+AIPROMPT_EOF
+)
 
-        AI_OUTPUT=$(claude --print "$AI_PROMPT" 2>/dev/null)
-
-        GOAL_CONTENT=$(echo "$AI_OUTPUT" | awk '/^=== GOAL\.md ===$/{f=1;next} /^=== score\.sh ===$/{f=0} f')
-        SCORE_CONTENT=$(echo "$AI_OUTPUT" | awk '/^=== score\.sh ===$/{f=1;next} /^===[^=]/{f=0} f')
-
-        if [ -n "$GOAL_CONTENT" ]; then
-          echo "$GOAL_CONTENT" > "$PROJECT_PATH/GOAL.md"
-          ok "GOAL.md generated"
-        else
-          err "Could not parse GOAL.md from AI output — falling back to questionnaire"
-          GOAL_METHOD="2"
-        fi
-
-        if [ -n "$SCORE_CONTENT" ]; then
-          echo "$SCORE_CONTENT" > "$PROJECT_PATH/score.sh"
-          chmod +x "$PROJECT_PATH/score.sh"
-          ok "score.sh generated"
-        else
-          err "Could not parse score.sh from AI output — will use template"
-        fi
+    # Gather project context to include in prompt (avoids needing tool access)
+    _proj_context=""
+    _proj_context="${_proj_context}Directory listing (2 levels):\n$(ls -la "$PROJECT_PATH" 2>/dev/null)\n\n"
+    for _cfg in pyproject.toml setup.cfg setup.py package.json go.mod Cargo.toml Makefile requirements.txt; do
+      if [ -f "$PROJECT_PATH/$_cfg" ]; then
+        _proj_context="${_proj_context}=== $_cfg ===\n$(head -60 "$PROJECT_PATH/$_cfg")\n\n"
       fi
-      ;;
-  esac
+    done
+    # Include first test file found for context
+    _test_file=$(find "$PROJECT_PATH" -maxdepth 3 -name "test_*.py" -o -name "*.test.ts" -o -name "*.spec.js" 2>/dev/null | head -1)
+    if [ -n "$_test_file" ]; then
+      _proj_context="${_proj_context}=== sample test file: $_test_file ===\n$(head -30 "$_test_file")\n\n"
+    fi
+    AI_PROMPT=$(printf '%s
 
-  if [ "$GOAL_METHOD" = "2" ]; then
-    # ── Questionnaire GOAL.md generation ──────────────────────────────────
+Project context collected from disk:
+%b' "$AI_PROMPT" "$_proj_context")
+
+    AI_OUTPUT=$(ai_run_prompt "$AI_PROMPT")
+
+    GOAL_CONTENT=$(echo "$AI_OUTPUT" | awk '/^=== GOAL\.md ===$/{f=1;next} /^=== score\.sh ===$/{f=0} f')
+    SCORE_CONTENT=$(echo "$AI_OUTPUT" | awk '/^=== score\.sh ===$/{f=1;next} /^===[^=]/{f=0} f')
+
+    if [ -n "$GOAL_CONTENT" ]; then
+      printf '%s\n' "$GOAL_CONTENT" > "$PROJECT_PATH/GOAL.md"
+      ok "GOAL.md generated"
+      AI_GENERATED=true
+    else
+      err "Could not parse GOAL.md from AI output — falling back to template"
+    fi
+
+    if [ -n "$SCORE_CONTENT" ]; then
+      printf '%s\n' "$SCORE_CONTENT" > "$PROJECT_PATH/score.sh"
+      chmod +x "$PROJECT_PATH/score.sh"
+      ok "score.sh generated"
+    else
+      err "Could not parse score.sh from AI output — will use template"
+    fi
+  else
+    err "No AI tool selected or available — using template fallback"
+  fi
+
+  # ── Template fallback (only when AI unavailable or failed) ───────────────
+  if ! $AI_GENERATED; then
+    GOAL_OBJECTIVE=$(printf '%s' "$USER_CONTEXT" | head -1)
+    GOAL_OBJECTIVE="${GOAL_OBJECTIVE:-improve this project}"
+
     echo ""
-    echo "  Answer the following to build your GOAL.md."
-    echo ""
-
-    ask "What is the objective? (e.g. 'bring test coverage above 80%')" GOAL_OBJECTIVE
-    ask "Target score [95]" GOAL_TARGET
-    GOAL_TARGET="${GOAL_TARGET:-95}"
-
+    echo "  No AI tool available. Collecting tool info for score.sh template."
     echo ""
     echo "  What test runner does this project use?"
     echo "  1) pytest    2) jest/npm test    3) go test    4) other / none"
     ask "Choice [1-4]" TEST_RUNNER_CHOICE
-
     echo "  What linter?"
-    echo "  1) ruff      2) eslint           3) golint     4) other / none"
+    echo "  1) ruff      2) eslint    3) golint    4) other / none"
     ask "Choice [1-4]" LINT_CHOICE
-
     echo "  What coverage tool?"
-    echo "  1) pytest-cov   2) jest --coverage   3) other / none"
+    echo "  1) pytest-cov    2) jest --coverage    3) other / none"
     ask "Choice [1-3]" COV_CHOICE
 
-    # Map choices to commands
     case "$TEST_RUNNER_CHOICE" in
       1) TEST_CMD="python -m pytest --tb=no -q" ;;
       2) TEST_CMD="npm test --silent" ;;
       3) TEST_CMD="go test ./... -v" ;;
-      *) TEST_CMD="echo 'no test runner configured'" ;;
+      *) TEST_CMD="" ;;
     esac
     case "$LINT_CHOICE" in
       1) LINT_CMD="ruff check ." ;;
       2) LINT_CMD="npx eslint . --format compact" ;;
       3) LINT_CMD="golint ./..." ;;
-      *) LINT_CMD="echo 'no linter configured'" ;;
+      *) LINT_CMD="" ;;
     esac
     case "$COV_CHOICE" in
       1) COV_CMD="python -m pytest --cov=. --cov-report=term-missing -q" ;;
       2) COV_CMD="npx jest --coverage --coverageReporters=text-summary" ;;
-      *) COV_CMD="echo 'no coverage tool configured'" ;;
+      *) COV_CMD="" ;;
     esac
 
-    # Write GOAL.md
-    cat > "$PROJECT_PATH/GOAL.md" << GOALEOF
-# Goal: ${GOAL_OBJECTIVE}
-
+    {
+      echo "# Goal: ${GOAL_OBJECTIVE}"
+      echo ""
+      if [ -n "$USER_CONTEXT" ]; then
+        echo "## Context"
+        echo ""
+        printf '%s\n' "$USER_CONTEXT"
+      fi
+      cat << 'TMPL'
 ## Fitness Function
 
-\`\`\`bash
+```bash
 bash score.sh
 bash score.sh --json
-\`\`\`
-
-### Metric Definition
-
-\`\`\`
-score = (tests + lint + coverage) / 100
-\`\`\`
-
-| Component | Max | What it measures |
-|-----------|-----|------------------|
-| **Tests** | 40 | All tests pass |
-| **Lint** | 30 | Zero lint warnings/errors |
-| **Coverage** | 30 | Statement coverage >= 80% |
-
-### Metric Mutability
-
-- [x] **Split** — Agent can improve code but not redefine the success criteria
+```
 
 ## Operating Mode
 
-- [x] **Converge** — Stop when criteria met
-
-### Stopping Conditions
-
-- score >= ${GOAL_TARGET}
-- 5 consecutive iterations with no improvement → plateau
-- 20 iterations completed → timeout
-- Tests broken after change → immediate revert
-
-## Bootstrap
-
-1. Ensure dependencies are installed for this project
-2. \`bash score.sh\` — record the baseline score
-3. \`./orchestrate.sh\` — start the loop
+- [x] **Converge** — Stop when score >= target
 
 ## Improvement Loop
 
-\`\`\`
+```
 repeat:
-  0. Read logs/iterations.jsonl — note what has been tried
   1. bash score.sh --json > /tmp/before.json
-  2. Find the weakest score component
-  3. Pick highest-impact action from Action Catalog
+  2. Find weakest component
+  3. Pick action from Action Catalog
   4. Make the change
-  5. Run targeted verification
-  6. bash score.sh --json > /tmp/after.json
-  7. If improved: commit with [S:NN→NN] format
-  8. If unchanged/regressed: revert
-  9. Append to iterations.jsonl
-\`\`\`
-
-Commit format: \`[S:NN→NN] component: what changed\`
+  5. bash score.sh --json > /tmp/after.json
+  6. If improved: commit; else revert
+```
 
 ## Action Catalog
 
 | Action | Impact | How |
 |--------|--------|-----|
-| Fix failing tests | +up to 40 pts | Run: \`${TEST_CMD}\`, read failures, fix root cause |
-| Resolve lint errors | +up to 30 pts | Run: \`${LINT_CMD}\`, fix each error |
-| Increase test coverage | +up to 30 pts | Find uncovered lines, write targeted tests |
-| Resolve lint warnings | +5–10 pts | Address remaining warnings after errors are clear |
-| Refactor complex functions | +2–5 pts | Reduce cyclomatic complexity |
+| Fix failing tests | +up to 40 pts | Run test command, fix root causes |
+| Resolve lint errors | +up to 30 pts | Run lint command, fix each error |
+| Increase coverage | +up to 30 pts | Find uncovered lines, write tests |
 
 ## Constraints
 
-1. **Never remove or skip tests** — only fix or add
-2. **Never use lint suppression comments** — fix the root cause
-3. **Never fabricate test results** — run the actual commands
+1. Never remove or skip tests
+2. Never use lint suppression comments
+3. Never fabricate test results
+TMPL
+    } > "$PROJECT_PATH/GOAL.md"
+    ok "GOAL.md created (template — edit before running the loop)"
 
-## File Map
-
-| File | Role | Editable? |
-|------|------|-----------|
-| \`GOAL.md\` | This file | Yes |
-| \`score.sh\` | Fitness function | Yes |
-| \`COMMENTs.md\` | Reviewer feedback | Written by Reviewer |
-| \`SUMMARY.md\` | Worker progress | Written by Worker |
-| \`logs/iterations.jsonl\` | Iteration history | Append only |
-
-## When to Stop
-
-\`\`\`
-Starting score: NN / 100
-Ending score:   NN / 100
-Iterations:     N
-Exit reason:    target reached / plateau / timeout / test break
-Changes made:   (list)
-Remaining gaps: (list)
-Next actions:   (what to do next)
-\`\`\`
-GOALEOF
-    ok "GOAL.md created"
-
-    # Write score.sh
-    cat > "$PROJECT_PATH/score.sh" << SCOREEOF
-#!/usr/bin/env bash
-set -euo pipefail
-SCORE=0
-TEST_SCORE=0
-LINT_SCORE=0
-COV_SCORE=0
-DETAILS=""
-
-# Tests (40 pts)
-RESULT=\$(${TEST_CMD} 2>&1 || true)
-PASS=\$(echo "\$RESULT" | grep -oP '\d+(?= passed)' || echo 0)
-FAIL=\$(echo "\$RESULT" | grep -oP '\d+(?= failed)' || echo 0)
-TOTAL=\$(( PASS + FAIL ))
-if [ "\$TOTAL" -gt 0 ]; then
-  TEST_SCORE=\$(( 40 * PASS / TOTAL ))
-elif echo "\$RESULT" | grep -qi "passed\|ok\|success"; then
-  TEST_SCORE=40
-fi
-DETAILS="\${DETAILS}tests: \${PASS}/\${TOTAL} (+\${TEST_SCORE})\n"
-SCORE=\$(( SCORE + TEST_SCORE ))
-
-# Lint (30 pts)
-ISSUE_COUNT=\$(${LINT_CMD} 2>/dev/null | wc -l || echo 0)
-if [ "\$ISSUE_COUNT" -eq 0 ]; then
-  LINT_SCORE=30
-else
-  LINT_SCORE=\$(( 30 - (30 * ISSUE_COUNT / 50) ))
-  [ "\$LINT_SCORE" -lt 0 ] && LINT_SCORE=0
-fi
-DETAILS="\${DETAILS}lint: \${ISSUE_COUNT} issues (+\${LINT_SCORE})\n"
-SCORE=\$(( SCORE + LINT_SCORE ))
-
-# Coverage (30 pts)
-COV=\$(${COV_CMD} 2>/dev/null | grep -oP '\d+(?=%)' | tail -1 || echo 0)
-if [ "\$COV" -ge 80 ]; then
-  COV_SCORE=30
-elif [ "\$COV" -ge 50 ]; then
-  COV_SCORE=\$(( (COV - 50) * 30 / 30 ))
-fi
-DETAILS="\${DETAILS}coverage: \${COV}% (+\${COV_SCORE})\n"
-SCORE=\$(( SCORE + COV_SCORE ))
-
-echo -e "Score breakdown:\n\${DETAILS}Total: \${SCORE}/100" >&2
-if [[ "\${1:-}" == "--json" ]]; then
-  echo "{\\"score\\":\$SCORE,\\"tests\\":\$TEST_SCORE,\\"lint\\":\$LINT_SCORE,\\"coverage\\":\$COV_SCORE}"
-else
-  echo "\$SCORE"
-fi
-SCOREEOF
+    {
+      echo "#!/usr/bin/env bash"
+      echo "set -euo pipefail"
+      echo "SCORE=0; TEST_SCORE=0; LINT_SCORE=0; COV_SCORE=0; DETAILS=\"\""
+      if [ -n "$TEST_CMD" ]; then
+        echo "RESULT=\$(${TEST_CMD} 2>&1 || true)"
+        echo "PASS=\$(echo \"\$RESULT\" | grep -oP '\\d+(?= passed)' || echo 0)"
+        echo "FAIL=\$(echo \"\$RESULT\" | grep -oP '\\d+(?= failed)' || echo 0)"
+        echo "TOTAL=\$(( PASS + FAIL ))"
+        echo "if [ \"\$TOTAL\" -gt 0 ]; then TEST_SCORE=\$(( 40 * PASS / TOTAL ))"
+        echo "elif echo \"\$RESULT\" | grep -qi 'passed\\|ok\\|success'; then TEST_SCORE=40; fi"
+      fi
+      echo "DETAILS=\"\${DETAILS}tests: \${PASS:-0}/\${TOTAL:-0} (+\${TEST_SCORE})\\n\""
+      echo "SCORE=\$(( SCORE + TEST_SCORE ))"
+      if [ -n "$LINT_CMD" ]; then
+        echo "ISSUE_COUNT=\$(${LINT_CMD} 2>/dev/null | wc -l || echo 0)"
+        echo "if [ \"\$ISSUE_COUNT\" -eq 0 ]; then LINT_SCORE=30"
+        echo "else LINT_SCORE=\$(( 30 - (30 * ISSUE_COUNT / 50) )); [ \"\$LINT_SCORE\" -lt 0 ] && LINT_SCORE=0; fi"
+      fi
+      echo "DETAILS=\"\${DETAILS}lint: \${ISSUE_COUNT:-0} issues (+\${LINT_SCORE})\\n\""
+      echo "SCORE=\$(( SCORE + LINT_SCORE ))"
+      if [ -n "$COV_CMD" ]; then
+        echo "COV=\$(${COV_CMD} 2>/dev/null | grep -oP '\\d+(?=%)' | tail -1 || echo 0)"
+        echo "if [ \"\$COV\" -ge 80 ]; then COV_SCORE=30"
+        echo "elif [ \"\$COV\" -ge 50 ]; then COV_SCORE=\$(( (COV - 50) * 30 / 30 )); fi"
+      fi
+      echo "DETAILS=\"\${DETAILS}coverage: \${COV:-0}% (+\${COV_SCORE})\\n\""
+      echo "SCORE=\$(( SCORE + COV_SCORE ))"
+      echo "echo -e \"Score breakdown:\\n\${DETAILS}Total: \${SCORE}/100\" >&2"
+      echo "if [[ \"\${1:-}\" == \"--json\" ]]; then"
+      echo "  echo \"{\\\"score\\\":\$SCORE,\\\"tests\\\":\$TEST_SCORE,\\\"lint\\\":\$LINT_SCORE,\\\"coverage\\\":\$COV_SCORE}\""
+      echo "else"
+      echo "  echo \"\$SCORE\""
+      echo "fi"
+    } > "$PROJECT_PATH/score.sh"
     chmod +x "$PROJECT_PATH/score.sh"
-    ok "score.sh created"
+    ok "score.sh created (template)"
   fi
+fi
+
+if [ ! -f "$PROJECT_PATH/DECISIONS.md" ]; then
+  GOAL_TITLE=$(head -1 "$PROJECT_PATH/GOAL.md" | sed 's/^# //')
+  cat > "$PROJECT_PATH/DECISIONS.md" << DECEOF
+# Workflow Decisions
+These decisions are authoritative. Do not contradict them.
+
+1. [USER] Goal: ${GOAL_TITLE}
+2. [SYSTEM] Scoring method: bash score.sh (see GOAL.md Fitness Function)
+DECEOF
+  ok "DECISIONS.md created"
 fi
 
 # If project is different from hephaestus dir, note it
