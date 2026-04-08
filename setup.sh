@@ -18,8 +18,8 @@ hr()  { echo ""; echo "───────────────────
 hdr() { hr; echo " $*"; hr; }
 ok()  { echo "  ✓ $*"; }
 err() { echo "  ✗ $*"; }
-ask() { printf "  %s: " "$1"; read -r "$2"; if [ -t 0 ]; then while read -r -t 0.05 _drain; do :; done; fi; }
-askp() { printf "  %s: " "$1"; read -rs "$2"; echo ""; if [ -t 0 ]; then while read -r -t 0.05 _drain; do :; done; fi; }
+ask() { printf "  %s: " "$1"; read -r "$2"; if [ -t 0 ]; then while read -r -t 0.2 _drain; do :; done; sleep 0.1; while read -r -t 0.2 _drain; do :; done; fi; }
+askp() { printf "  %s: " "$1"; read -rs "$2"; echo ""; if [ -t 0 ]; then while read -r -t 0.2 _drain; do :; done; sleep 0.1; while read -r -t 0.2 _drain; do :; done; fi; }
 
 # Invoke the user-selected AI generation tool with a prompt
 ai_run_prompt() {
@@ -123,14 +123,17 @@ fi
 
 if [ "$GOAL_ACTION" = "create" ]; then
   echo ""
-  echo "  Paste your goal / analysis below (or just press Enter to let AI analyze the project)."
-  echo "  Enter a blank line when done."
+  echo "  Paste your goal / analysis, then type '---' on a new line when done."
+  echo "  (Press Enter immediately to skip and let AI analyze the project.)"
   echo ""
-  printf "  Goal context (blank line to finish):\n"
+  printf "  Goal context ('---' to finish):\n"
 
   USER_CONTEXT=""
-  while IFS= read -r _ctx_line || true; do
-    [[ -z "$_ctx_line" ]] && break
+  _ctx_first=true
+  while IFS= read -r _ctx_line || break; do
+    if $_ctx_first && [[ -z "$_ctx_line" ]]; then break; fi
+    _ctx_first=false
+    [[ "$_ctx_line" == "---" ]] && break
     USER_CONTEXT="${USER_CONTEXT}${_ctx_line}"$'\n'
   done
 
