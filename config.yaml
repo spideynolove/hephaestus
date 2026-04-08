@@ -1,0 +1,45 @@
+# ── Loop Control ────────────────────────────────────────
+loop:
+  max_iterations: 20
+  no_improve_limit: 5      # stop after N consecutive non-improving iterations
+  target_score: 95         # 0–100; loop exits when score >= this
+  revert_on_regression: true
+
+# ── Agent Commands ───────────────────────────────────────
+agents:
+  worker:
+    tool: codex             # executable on PATH; overridden by WORKER_TOOL_OVERRIDE in .env
+    model: o4-mini          # overridden by WORKER_MODEL in .env
+    flags: "exec --full-auto -m o4-mini"
+    flags_claude_override: "--dangerously-skip-permissions --print"  # used when WORKER_TOOL_OVERRIDE=claude
+    role_description: "You are the Worker improving the hephaestus project. Read GOAL.md and COMMENTs.md. Use Edit and Write tools to fix shell scripts and create bats test files. Use Bash only to run 'bash score.sh', 'shellcheck', or 'bats tests/' to verify your changes. NEVER run orchestrate.sh, setup.sh, or any loop scripts. Write a progress report to SUMMARY.md when done."
+
+  reviewer:
+    tool: claude            # Claude Code CLI
+    model: claude-sonnet-4-6
+    flags: "--print"
+    role_description: "You are the Reviewer. Read SUMMARY.md and GOAL.md. The current score is {SCORE}/{TARGET}. Identify the single weakest area. Write specific, actionable improvement instructions to COMMENTs.md."
+
+# ── Scoring Weights (used by score.sh) ───────────────────
+scoring:
+  tests:
+    command: "npm test --silent 2>&1 | tail -1"
+    weight: 40              # max points from this component
+  lint:
+    command: "npx eslint . --max-warnings 0 --format compact 2>&1 | wc -l"
+    weight: 30
+    invert: true            # fewer warnings = higher score
+    max_warnings: 50
+  coverage:
+    command: "npx jest --coverage --coverageReporters=text-summary 2>&1 | grep 'Statements' | grep -oP '[0-9]+\\.[0-9]+(?=%)'"
+    weight: 30
+
+# ── Git ──────────────────────────────────────────────────
+git:
+  commit_on_improvement: true
+  commit_message_prefix: "ai-loop iter"
+  tracked_files:
+    - "src/"
+    - "tests/"
+    - "SUMMARY.md"
+    - "COMMENTs.md"

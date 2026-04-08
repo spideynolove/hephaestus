@@ -1,0 +1,305 @@
+#!/usr/bin/env bash
+# orchestrate.sh — Automated Worker↔Reviewer loop
+#
+# Usage:
+#   ./orchestrate.sh                  # run with config.yaml defaults
+#   ./orchestrate.sh --max-iter 5     # override max iterations
+#   ./orchestrate.sh --target 80      # override target score
+#   ./orchestrate.sh --dry-run        # print commands without executing
+#
+# Environment (set via setup.sh or .env):
+#   PROJECT_PATH — path to the project being improved (default: current dir)
+
+set -euo pipefail
+
+# ── Recursion guard ───────────────────────────────────────────────────────────
+if [ -n "${HEPHAESTUS_RUNNING:-}" ]; then
+  echo "ERROR: orchestrate.sh called recursively — aborting." >&2
+  exit 1
+fi
+export HEPHAESTUS_RUNNING=1
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# ── Load environment ──────────────────────────────────────────────────────────
+[ -f "$SCRIPT_DIR/.env" ] && source "$SCRIPT_DIR/.env"
+
+# ── Resolve project path ──────────────────────────────────────────────────────
+PROJECT_PATH="${PROJECT_PATH:-$SCRIPT_DIR}"
+PROJECT_PATH="$(realpath "$PROJECT_PATH")"
+PROJECT_NAME="$(basename "$PROJECT_PATH")"
+LOG_DIR="$SCRIPT_DIR/logs/$PROJECT_NAME"
+
+# All file operations (GOAL.md, score.sh, COMMENTs.md, SUMMARY.md, git) happen here
+cd "$PROJECT_PATH"
+
+# ── Parse config.yaml (requires python3 + pyyaml) ────────────────────────────
+_cfg() {
+  python3 -c "
+import yaml
+with open('$SCRIPT_DIR/config.yaml') as f:
+    d = yaml.safe_load(f)
+keys = '$1'.split('.')
+v = d
+for k in keys:
+    v = v[k]
+print(v)
+" 2>/dev/null || echo "$2"
+}
+
+# ── Provider overrides from .env ──────────────────────────────────────────────
+WORKER_TOOL_ENV_OVERRIDE="${WORKER_TOOL_OVERRIDE:-}"
+WORKER_MODEL_ENV_OVERRIDE="${WORKER_MODEL:-}"
+
+MAX_ITER=$(_cfg loop.max_iterations 20)
+NO_IMPROVE_LIMIT=$(_cfg loop.no_improve_limit 5)
+TARGET_SCORE=$(_cfg loop.target_score 95)
+REVERT_ON_REGRESSION=$(_cfg loop.revert_on_regression true)
+
+WORKER_TOOL=$(_cfg agents.worker.tool codex)
+WORKER_FLAGS=$(_cfg agents.worker.flags "--quiet --auto-edit")
+WORKER_ROLE=$(_cfg agents.worker.role_description "Read GOAL.md and COMMENTs.md. Apply improvements. Write progress to SUMMARY.md.")
+WORKER_FLAGS_CLAUDE_OVERRIDE=$(_cfg agents.worker.flags_claude_override "--print")
+
+if [ -n "$WORKER_TOOL_ENV_OVERRIDE" ]; then
+  WORKER_TOOL="$WORKER_TOOL_ENV_OVERRIDE"
+  WORKER_FLAGS="$WORKER_FLAGS_CLAUDE_OVERRIDE"
+fi
+if [ -n "$WORKER_MODEL_ENV_OVERRIDE" ]; then
+  WORKER_FLAGS="${WORKER_FLAGS%% -m *} -m $WORKER_MODEL_ENV_OVERRIDE"
+fi
+
+REVIEWER_TOOL=$(_cfg agents.reviewer.tool claude)
+REVIEWER_FLAGS=$(_cfg agents.reviewer.flags "--print")
+REVIEWER_ROLE=$(_cfg agents.reviewer.role_description "Read SUMMARY.md and GOAL.md. Write feedback to COMMENTs.md.")
+
+# ── Argument overrides ────────────────────────────────────────────────────────
+DRY_RUN=false
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --max-iter) MAX_ITER="$2"; shift 2 ;;
+    --target)   TARGET_SCORE="$2"; shift 2 ;;
+    --dry-run)  DRY_RUN=true; shift ;;
+    *) echo "Unknown arg: $1"; exit 1 ;;
+  esac
+done
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+log() { echo "[$(date -u +%H:%M:%S)] $*"; }
+die() { echo "ERROR: $*" >&2; exit 1; }
+
+run() {
+  if $DRY_RUN; then
+    echo "  [DRY-RUN] $*"
+  else
+    eval "$*"
+  fi
+}
+
+notify() {
+  local msg="$1"
+  log "$msg"
+  if [ -n "${SLACK_WEBHOOK_URL:-}" ]; then
+    curl -s -X POST "$SLACK_WEBHOOK_URL" \
+      -H 'Content-type: application/json' \
+      -d "{\"text\": \"[$PROJECT_NAME] $msg\"}" >/dev/null 2>&1 || true
+  fi
+  if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && [ -n "${TELEGRAM_CHAT_ID:-}" ]; then
+    curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+      -d "chat_id=${TELEGRAM_CHAT_ID}" \
+      --data-urlencode "text=[$PROJECT_NAME] $msg" >/dev/null 2>&1 || true
+  fi
+  if [ -n "${DISCORD_WEBHOOK_URL:-}" ]; then
+    curl -s -X POST "$DISCORD_WEBHOOK_URL" \
+      -H 'Content-Type: application/json' \
+      -d "{\"content\": \"[$PROJECT_NAME] $msg\"}" >/dev/null 2>&1 || true
+  fi
+}
+
+# ── Pre-flight checks ─────────────────────────────────────────────────────────
+[ -f GOAL.md ]  || die "GOAL.md not found in $PROJECT_PATH. Run: bash $SCRIPT_DIR/setup.sh"
+[ -f score.sh ] || die "score.sh not found in $PROJECT_PATH. Run: bash $SCRIPT_DIR/setup.sh"
+[ -x score.sh ] || chmod +x score.sh
+if ! $DRY_RUN; then
+  command -v "$WORKER_TOOL"   &>/dev/null || die "$WORKER_TOOL not found on PATH."
+  command -v "$REVIEWER_TOOL" &>/dev/null || die "$REVIEWER_TOOL not found on PATH."
+fi
+command -v python3 &>/dev/null || die "python3 required for config parsing."
+if ! python3 -c "import yaml" 2>/dev/null; then
+  log "WARNING: pyyaml not found — using built-in defaults (pip install pyyaml to enable config.yaml)"
+fi
+
+mkdir -p "$LOG_DIR"
+
+# ── Write session metadata ────────────────────────────────────────────────────
+SESSION_TS=$(date -u +%Y%m%dT%H%M%SZ)
+if ! $DRY_RUN; then
+  GOAL_EXCERPT=$(head -5 GOAL.md | tr '\n' ' ' | sed 's/"/\\"/g')
+  cat > "$LOG_DIR/session-${SESSION_TS}.json" << EOF
+{
+  "session_ts": "${SESSION_TS}",
+  "project": "${PROJECT_NAME}",
+  "project_dir": "${PROJECT_PATH}",
+  "worker_tool": "${WORKER_TOOL}",
+  "reviewer_tool": "${REVIEWER_TOOL}",
+  "target_score": ${TARGET_SCORE},
+  "max_iter": ${MAX_ITER},
+  "goal_excerpt": "${GOAL_EXCERPT}"
+}
+EOF
+  ln -sf "$LOG_DIR/session-${SESSION_TS}.json" "$LOG_DIR/session-latest.json"
+fi
+
+touch "$LOG_DIR/iterations.jsonl"
+
+# ── State ─────────────────────────────────────────────────────────────────────
+score=0
+best_score=0
+prev_score=0
+no_improve_count=0
+exit_code=0
+iter=0
+
+# ── Seed COMMENTs.md if empty ─────────────────────────────────────────────────
+if [ ! -s COMMENTs.md ]; then
+  cat > COMMENTs.md << 'EOF'
+# Initial Task
+
+Read GOAL.md for the full objective and constraints.
+
+**First iteration:** Assess the current state of the codebase against the
+fitness function in GOAL.md. Pick the highest-impact action from the Action
+Catalog and apply it. Report what you changed in SUMMARY.md.
+EOF
+fi
+
+# ── Main loop ─────────────────────────────────────────────────────────────────
+log "Project      : $PROJECT_NAME ($PROJECT_PATH)"
+log "Logs         : $LOG_DIR"
+log "Starting loop | target=$TARGET_SCORE max_iter=$MAX_ITER no_improve_limit=$NO_IMPROVE_LIMIT"
+notify "Loop started | target=${TARGET_SCORE}/100"
+
+for iter in $(seq 1 "$MAX_ITER"); do
+  log "━━━ Iteration $iter / $MAX_ITER ━━━"
+
+  # ── WORKER step ──────────────────────────────────────────────────────────
+  log "Worker ($WORKER_TOOL) starting..."
+  WORKER_ROLE_EXPANDED="$(echo "$WORKER_ROLE" | sed "s|{SCORE}|${best_score}|g; s|{TARGET}|${TARGET_SCORE}|g")"
+  FULL_WORKER_PROMPT="${WORKER_ROLE_EXPANDED}
+
+Project directory: ${PROJECT_PATH}
+
+---
+GOAL (GOAL.md):
+$(cat GOAL.md)
+
+---
+CURRENT FEEDBACK (COMMENTs.md):
+$(cat COMMENTs.md)"
+
+  if $DRY_RUN; then
+    log "  [DRY-RUN] Would run: $WORKER_TOOL $WORKER_FLAGS '<prompt>'"
+  else
+    read -ra _WFLAGS <<< "$WORKER_FLAGS"
+    $WORKER_TOOL "${_WFLAGS[@]}" "$FULL_WORKER_PROMPT" \
+      || { log "Worker exited non-zero — continuing anyway"; }
+  fi
+
+  # ── SCORE step ────────────────────────────────────────────────────────────
+  log "Scoring..."
+  prev_score=$score
+  score=0
+  score_json="{}"
+  if ! $DRY_RUN; then
+    score=$(bash score.sh 2>/dev/null) || score=0
+    score_json=$(bash score.sh --json 2>/dev/null) || score_json="{}"
+  fi
+  log "Score: $score / 100 (best so far: $best_score)"
+
+  # ── Check stopping condition: target reached ──────────────────────────────
+  if (( score >= TARGET_SCORE )); then
+    notify "Target ${TARGET_SCORE} reached! Final score: ${score}. Done in ${iter} iterations."
+    exit_code=0
+    break
+  fi
+
+  # ── Commit or revert ──────────────────────────────────────────────────────
+  ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  kept=false
+  delta=$(( score - best_score ))
+
+  if (( score > best_score )); then
+    best_score=$score
+    no_improve_count=0
+    kept=true
+    if [ "$(_cfg git.commit_on_improvement true)" = "True" ] || \
+       [ "$(_cfg git.commit_on_improvement true)" = "true" ]; then
+      run "git add -A && git commit -m '[S:${prev_score}→${score}] iter ${iter}: score improved' --allow-empty" \
+        || log "git commit skipped (not a repo or nothing staged)"
+    fi
+    log "Improvement! Committed. (delta: +$delta)"
+  else
+    no_improve_count=$(( no_improve_count + 1 ))
+    log "No improvement (delta: $delta). No-improve streak: $no_improve_count/$NO_IMPROVE_LIMIT"
+    if [ "$REVERT_ON_REGRESSION" = "true" ] && (( score < best_score )); then
+      run "git checkout -- . 2>/dev/null" || log "Revert skipped (not a repo)"
+      log "Regression detected — reverted changes."
+    fi
+  fi
+
+  # ── Log iteration ─────────────────────────────────────────────────────────
+  action_summary=$(head -10 SUMMARY.md 2>/dev/null | tr '\n' ' ' || echo "no summary")
+  action_summary="${action_summary//\"/\\\"}"
+  result_str="reverted"
+  $kept && result_str="kept"
+  echo "{\"iteration\":$iter,\"before\":$prev_score,\"after\":$score,\"best\":$best_score,\"delta\":$delta,\"result\":\"$result_str\",\"scores\":$score_json,\"action\":\"${action_summary}\",\"ts\":\"$ts\",\"session\":\"${SESSION_TS}\"}" \
+    >> "$LOG_DIR/iterations.jsonl"
+  if [ -f SUMMARY.md ]; then
+    cp SUMMARY.md "$LOG_DIR/iter-${iter}-summary.md" 2>/dev/null || true
+  fi
+
+  # ── Check stopping condition: plateau ────────────────────────────────────
+  if (( no_improve_count >= NO_IMPROVE_LIMIT )); then
+    notify "Plateau after $iter iterations (${NO_IMPROVE_LIMIT} with no improvement). Best: ${best_score}/100."
+    exit_code=1
+    break
+  fi
+
+  # ── REVIEWER step ─────────────────────────────────────────────────────────
+  log "Reviewer ($REVIEWER_TOOL) starting..."
+  REVIEWER_PROMPT="$(echo "$REVIEWER_ROLE" \
+    | sed "s|{SCORE}|${score}|g; s|{TARGET}|${TARGET_SCORE}|g")
+
+GOAL.md contents:
+$(cat GOAL.md)
+
+SUMMARY.md contents:
+$(cat SUMMARY.md 2>/dev/null || echo '(empty — worker has not written yet)')
+
+Write your feedback to COMMENTs.md. Be specific: name files, line numbers, and exact actions."
+
+  if $DRY_RUN; then
+    log "  [DRY-RUN] Would run: $REVIEWER_TOOL $REVIEWER_FLAGS '<prompt>' > COMMENTs.md"
+  else
+    read -ra _RFLAGS <<< "$REVIEWER_FLAGS"
+    $REVIEWER_TOOL "${_RFLAGS[@]}" "$REVIEWER_PROMPT" > COMMENTs.md \
+      || { log "Reviewer exited non-zero — continuing anyway"; }
+  fi
+
+  log "Reviewer wrote COMMENTs.md ($(wc -l < COMMENTs.md) lines)"
+done
+
+# ── Final summary ─────────────────────────────────────────────────────────────
+if (( iter >= MAX_ITER )) && (( exit_code != 0 )); then
+  notify "Max iterations ($MAX_ITER) reached. Best score: ${best_score}/100."
+  exit_code=2
+fi
+
+log "━━━ Loop complete ━━━"
+log "Project      : $PROJECT_NAME"
+log "Iterations   : $iter"
+log "Best score   : $best_score / 100"
+log "Exit code    : $exit_code (0=success 1=plateau 2=timeout 3=test-break)"
+log "Logs         : $LOG_DIR"
+
+exit $exit_code
