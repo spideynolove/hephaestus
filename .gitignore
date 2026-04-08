@@ -1,3 +1,6 @@
 docs/
 logs/
 .env
+MEMORY.md
+DECISIONS.md
+STATE.sh

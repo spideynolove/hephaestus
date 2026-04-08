@@ -112,11 +112,26 @@ All tested before saving.
 
 ```
 repeat until score ≥ target, plateau, or timeout:
-  1. Worker reads GOAL.md + COMMENTs.md → applies changes → writes SUMMARY.md
+  1. Worker reads GOAL.md + COMMENTs.md + MEMORY.md + DECISIONS.md → applies changes → writes SUMMARY.md
   2. score.sh runs in the project dir → outputs 0–100
   3. If improved: git commit [S:NN→NN]; if regressed: git revert
-  4. Reviewer reads SUMMARY.md + GOAL.md → writes new COMMENTs.md
+  4. Update MEMORY.md with trajectory, tried actions, observations
+  5. Reviewer reads SUMMARY.md + GOAL.md + MEMORY.md + DECISIONS.md → writes new COMMENTs.md
 ```
+
+### Memory Mechanism
+
+When agent context fills up and sessions restart, three memory files ensure workflow continuity:
+
+| File | Purpose | Max Size |
+|------|---------|----------|
+| `MEMORY.md` | Workflow state: score trajectory, tried actions, next priorities, observations | 80 lines |
+| `STATE.sh` | Machine-readable state for loop restart (scores, iteration count) | ~20 lines |
+| `DECISIONS.md` | Immutable directives preventing agent drift | ~15 lines |
+
+These are auto-generated on first run and updated each iteration. Injected into every Worker and Reviewer prompt before GOAL.md.
+
+**Condensation mode**: If the Worker produces empty summaries for N consecutive iterations (configurable), prompts switch to a 3-line condensed format — giving agents maximum context room for small-context providers like DeepSeek.
 
 ### Exit codes
 
@@ -198,6 +213,9 @@ Default weights (edit `config.yaml`):
 | your-project/ | `score.sh` | Fitness function implementation |
 | your-project/ | `COMMENTs.md` | Reviewer → Worker (rewritten each iteration) |
 | your-project/ | `SUMMARY.md` | Worker → Reviewer (written by Worker) |
+| your-project/ | `MEMORY.md` | Workflow memory (auto-managed, not committed) |
+| your-project/ | `STATE.sh` | Loop state persistence (auto-managed, not committed) |
+| your-project/ | `DECISIONS.md` | Anti-deviation anchor (auto-managed, not committed) |
 
 ---
 

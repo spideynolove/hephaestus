@@ -4,6 +4,10 @@ loop:
   no_improve_limit: 5      # stop after N consecutive non-improving iterations
   target_score: 95         # 0–100; loop exits when score >= this
   revert_on_regression: true
+  memory_enabled: true     # enable MEMORY.md and STATE.sh persistence
+  memory_max_lines: 80     # max lines in MEMORY.md before compaction
+  condense_after_empty: 3  # switch to condensed prompts after N empty summaries
+  trajectory_window: 10    # how many recent iterations to show in trajectory
 
 # ── Agent Commands ───────────────────────────────────────
 agents:

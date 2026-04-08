@@ -5,6 +5,7 @@ REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 setup() {
   cd "$REPO_ROOT"
   unset HEPHAESTUS_RUNNING
+  unset HEPHAESTUS_SCORING
 }
 
 @test "orchestrate.sh passes bash syntax check" {
@@ -45,4 +46,81 @@ setup() {
 @test "orchestrate.sh --dry-run creates logs directory" {
   run bash orchestrate.sh --dry-run
   [ -d logs ]
+}
+
+@test "orchestrate.sh --dry-run creates STATE.sh" {
+  run bash orchestrate.sh --dry-run --max-iter 1
+  [ -f STATE.sh ]
+}
+
+@test "STATE.sh contains HEPH_STATE_VERSION" {
+  run bash orchestrate.sh --dry-run --max-iter 1
+  [ -f STATE.sh ]
+  grep -q 'HEPH_STATE_VERSION=1' STATE.sh
+}
+
+@test "STATE.sh contains HEPH_BEST_SCORE" {
+  run bash orchestrate.sh --dry-run --max-iter 1
+  grep -q 'HEPH_BEST_SCORE=' STATE.sh
+}
+
+@test "orchestrate.sh --dry-run creates MEMORY.md" {
+  run bash orchestrate.sh --dry-run --max-iter 1
+  [ -f MEMORY.md ]
+}
+
+@test "MEMORY.md contains Workflow Memory header" {
+  run bash orchestrate.sh --dry-run --max-iter 1
+  grep -q '# Workflow Memory' MEMORY.md
+}
+
+@test "MEMORY.md contains Current State section" {
+  run bash orchestrate.sh --dry-run --max-iter 1
+  grep -q '## Current State' MEMORY.md
+}
+
+@test "MEMORY.md contains Score Trajectory section" {
+  run bash orchestrate.sh --dry-run --max-iter 1
+  grep -q '## Score Trajectory' MEMORY.md
+}
+
+@test "MEMORY.md contains Next Priority Actions section" {
+  run bash orchestrate.sh --dry-run --max-iter 1
+  grep -q '## Next Priority Actions' MEMORY.md
+}
+
+@test "orchestrate.sh --dry-run creates DECISIONS.md" {
+  run bash orchestrate.sh --dry-run --max-iter 1
+  [ -f DECISIONS.md ]
+}
+
+@test "DECISIONS.md contains authoritative directive" {
+  run bash orchestrate.sh --dry-run --max-iter 1
+  grep -q 'authoritative' DECISIONS.md
+}
+
+@test "DECISIONS.md is not overwritten on second run" {
+  run bash orchestrate.sh --dry-run --max-iter 1
+  [ -f DECISIONS.md ]
+  BEFORE=$(md5sum DECISIONS.md | cut -d' ' -f1)
+  run bash orchestrate.sh --dry-run --max-iter 1
+  AFTER=$(md5sum DECISIONS.md | cut -d' ' -f1)
+  [ "$BEFORE" = "$AFTER" ]
+}
+
+@test "corrupted STATE.sh triggers warning" {
+  echo "GARBAGE" > STATE.sh
+  run bash orchestrate.sh --dry-run --max-iter 1
+  [[ "$output" == *"WARNING"* ]]
+}
+
+@test "MEMORY.md respects max line cap" {
+  run bash orchestrate.sh --dry-run --max-iter 1
+  lines=$(wc -l < MEMORY.md)
+  [ "$lines" -le 80 ]
+}
+
+@test "memory injection appears in dry-run worker output" {
+  run bash orchestrate.sh --dry-run --max-iter 1
+  [[ "$output" == *"WORKFLOW MEMORY"* ]] || [[ "$output" == *"Would run"* ]]
 }

@@ -1,27 +1,25 @@
-# Goal: Make hephaestus robust and well-tested
+# Goal: Make hephaestus effective at improving projects
 
 ## Fitness Function
 
 ```bash
 bash score.sh          # human-readable breakdown to stderr, integer to stdout
-bash score.sh --json   # {"score":N,"shellcheck":N,"tests":N,"docs":N}
+bash score.sh --json   # {"score":N,"correctness":N}
 ```
 
 ### Metric Definition
 
 ```
-score = shellcheck_score + tests_score + docs_score
+score = correctness (0–100, based on bats test pass rate)
 ```
 
 | Component | Max | What it measures | How |
 |-----------|-----|------------------|-----|
-| **Shellcheck** | 30 | Zero warnings/errors across all `.sh` files | `shellcheck -x orchestrate.sh score.sh setup.sh` |
-| **Tests** | 40 | Bats test suite passes | `bats tests/` |
-| **Docs** | 30 | GOAL.md + README have all required sections | grep checks |
+| **Correctness** | 100 | All bats tests pass: memory mechanism, state persistence, prompt injection | `bats tests/*.bats` |
 
 ### Metric Mutability
 
-- [x] **Open** — Agent may improve scripts, add tests, fix docs, and update score.sh if the metric itself is wrong
+- [x] **Open** — Agent may improve scripts, add tests, fix mechanisms, and update score.sh if the metric itself is wrong
 
 ## Operating Mode
 
@@ -37,7 +35,7 @@ score = shellcheck_score + tests_score + docs_score
 ## Bootstrap
 
 1. `sudo apt install shellcheck bats` — required for scoring
-2. `bash score.sh` — record baseline (expect ~38/100)
+2. `bash score.sh` — record baseline
 3. `./orchestrate.sh` — run the loop
 
 ## Improvement Loop
@@ -46,7 +44,7 @@ score = shellcheck_score + tests_score + docs_score
 repeat:
   0. Read logs/hephaestus/iterations.jsonl — note what has been tried
   1. bash score.sh --json > /tmp/before.json
-  2. Read component breakdown — find weakest
+  2. Read component breakdown — find failing tests
   3. Pick highest-impact action from Action Catalog
   4. Make the change
   5. bash score.sh --json > /tmp/after.json
@@ -61,15 +59,11 @@ Commit format: `[S:NN→NN] component: what changed`
 
 | Action | Impact | How |
 |--------|--------|-----|
-| Create `tests/` and write bats tests for `orchestrate.sh --dry-run` | +15 pts | `mkdir tests && cat > tests/orchestrate.bats` — test dry-run exits 0, logs created |
-| Write bats tests for `score.sh --json` output | +10 pts | Assert JSON contains `score` key, integer value |
-| Write bats tests for `setup.sh` syntax and behavior | +10 pts | Test `bash -n setup.sh` passes, required prompts exist |
-| Fix SC2144 glob error in `score.sh` (lines 47-48) | +8 pts | Replace `-f .eslintrc*` glob with a `for` loop or `ls` check |
-| Fix SC2086 unquoted `$WORKER_FLAGS` / `$REVIEWER_FLAGS` in `orchestrate.sh` | +5 pts | Add double quotes |
-| Fix SC2163 `export "$line"` bug in `setup.sh` | +5 pts | Use `export "${line?}"` or split key/value |
-| Fix SC2034 unused variables (`score_details`, `PROJECT_NAME`) | +3 pts | Remove or use them |
-| Fix SC2001 sed→bash substitution style in `orchestrate.sh` | +2 pts | Use `${var//search/replace}` |
-| Add missing README sections if any | +2 pts | Check grep against required headings |
+| Fix failing orchestrate.bats tests | +pts per test | Run `bats tests/orchestrate.bats`, fix each failure |
+| Fix failing score.bats tests | +pts per test | Run `bats tests/score.bats`, fix each failure |
+| Fix failing setup.bats tests | +pts per test | Run `bats tests/setup.bats`, fix each failure |
+| Add missing correctness tests for memory mechanism | +pts | Test STATE.sh restore, MEMORY.md cap, condensation, edge cases |
+| Fix shellcheck warnings | +maintainability | `shellcheck -x orchestrate.sh score.sh setup.sh` |
 
 ## Constraints
 
@@ -82,20 +76,23 @@ Commit format: `[S:NN→NN] component: what changed`
 
 | File | Role | Editable? |
 |------|------|-----------|
-| `orchestrate.sh` | Loop runner | Yes |
-| `score.sh` | Fitness function | Yes |
+| `orchestrate.sh` | Loop runner with memory mechanism | Yes |
+| `score.sh` | Fitness function (correctness tests) | Yes |
 | `setup.sh` | Setup wizard | Yes |
 | `GOAL.md` | This file | Yes |
 | `README.md` | Documentation | Yes |
 | `config.yaml` | Loop config | Yes |
-| `tests/*.bats` | Bats test suite | Yes — create these |
+| `MEMORY.md` | Workflow memory (auto-generated) | No — managed by loop |
+| `STATE.sh` | Machine-readable state (auto-generated) | No — managed by loop |
+| `DECISIONS.md` | Anti-deviation anchor (auto-generated) | No — managed by loop |
+| `tests/*.bats` | Bats test suite | Yes — create/edit these |
 | `logs/hephaestus/iterations.jsonl` | Iteration history | Append only |
 | `.env` | Active config | No |
 
 ## When to Stop
 
 ```
-Starting score: 49 / 100
+Starting score: NN / 100
 Ending score:   NN / 100
 Iterations:     N
 Exit reason:    target reached / plateau / timeout

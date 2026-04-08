@@ -39,19 +39,9 @@ setup() {
   [[ "$score_val" =~ ^[0-9]+$ ]]
 }
 
-@test "score.sh --json contains shellcheck key" {
+@test "score.sh --json contains correctness key" {
   run bash score.sh --json 2>/dev/null
-  [[ "$output" == *'"shellcheck"'* ]]
-}
-
-@test "score.sh --json contains tests key" {
-  run bash score.sh --json 2>/dev/null
-  [[ "$output" == *'"tests"'* ]]
-}
-
-@test "score.sh --json contains docs key" {
-  run bash score.sh --json 2>/dev/null
-  [[ "$output" == *'"docs"'* ]]
+  [[ "$output" == *'"correctness"'* ]]
 }
 
 @test "score.sh writes breakdown to stderr not stdout" {

@@ -116,6 +116,106 @@ notify() {
   fi
 }
 
+# ── Memory management ─────────────────────────────────────────────────────────
+update_memory() {
+  local ts_now
+  ts_now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  local trajectory
+  trajectory=$(tail -10 "$LOG_DIR/iterations.jsonl" 2>/dev/null \
+    | python3 -c "
+import sys, json
+print('| # | Score | Delta | Result | Action |')
+print('|---|-------|-------|--------|--------|')
+for line in sys.stdin:
+    try:
+        d = json.loads(line.strip())
+        action = d.get('action','?')[:40]
+        print(f\"| {d['iteration']} | {d['after']} | {d['delta']:+d} | {d['result']} | {action} |\")
+    except (json.JSONDecodeError, KeyError):
+        pass
+" 2>/dev/null || echo "(no trajectory data)")
+
+  local action_brief
+  action_brief=$(head -1 SUMMARY.md 2>/dev/null | head -c 80 || echo "no summary")
+  local tried_entry=""
+  if [ -n "$action_brief" ] && [ "$action_brief" != "no summary" ]; then
+    if $kept; then
+      tried_entry="- [KEPT] ${action_brief} (score ${prev_score} -> ${score})"
+    else
+      tried_entry="- [REVERTED] ${action_brief} (score stayed at ${score})"
+    fi
+  fi
+
+  local weakest
+  weakest=$(echo "$score_json" | python3 -c "
+import sys, json
+try:
+    d = json.loads(sys.stdin.read())
+    components = {k:v for k,v in d.items() if k != 'score'}
+    if components:
+        weakest = min(components, key=components.get)
+        print(f'{weakest} ({components[weakest]})')
+    else:
+        print('unknown')
+except (json.JSONDecodeError, ValueError):
+    print('unknown')
+" 2>/dev/null || echo "unknown")
+
+  local status="RUNNING"
+  (( no_improve_count >= NO_IMPROVE_LIMIT )) && status="STUCK"
+  (( score >= TARGET_SCORE )) && status="COMPLETE"
+
+  local next_action
+  next_action=$(grep -m1 -i 'priority\|next action\|most important\|highest-impact' COMMENTs.md 2>/dev/null \
+    | head -c 120 || echo "Follow COMMENTs.md instructions")
+
+  local tried_section=""
+  if [ -f "$MEMORY_FILE" ]; then
+    tried_section=$(sed -n '/^## What Has Been Tried/,/^## /{ /^## What Has Been Tried/d; /^## /q; p }' "$MEMORY_FILE" \
+      | head -15)
+  fi
+  local blocked_section=""
+  if [ -f "$MEMORY_FILE" ]; then
+    blocked_section=$(sed -n '/^## Blocked/,${ p }' "$MEMORY_FILE" | tail -n +2 | head -10)
+  fi
+
+  cat > "$MEMORY_FILE" << MEMEOF
+# Workflow Memory
+Last updated: ${ts_now}
+Session: ${SESSION_TS} | Total iterations across all sessions: ${TOTAL_ITERATIONS}
+
+## Current State
+- Score: ${score}/100 (best ever: ${best_score})
+- Status: ${status}
+- Goal target: ${TARGET_SCORE}
+- No-improve streak: ${no_improve_count}/${NO_IMPROVE_LIMIT}
+
+## Score Trajectory (last 10 iterations)
+${trajectory}
+
+## What Has Been Tried
+${tried_section}
+${tried_entry}
+
+## Key Observations
+- Weakest component: ${weakest}
+- Score breakdown: ${score_json}
+
+## Next Priority Actions
+1. ${next_action}
+
+## Blocked / Do Not Attempt
+${blocked_section}
+MEMEOF
+
+  if (( $(wc -l < "$MEMORY_FILE") > MEMORY_MAX_LINES )); then
+    head -"$MEMORY_MAX_LINES" "$MEMORY_FILE" > "$MEMORY_FILE.tmp" && mv "$MEMORY_FILE.tmp" "$MEMORY_FILE"
+    log "MEMORY.md capped at ${MEMORY_MAX_LINES} lines"
+  fi
+
+  log "MEMORY.md updated (${ts_now})"
+}
+
 # ── Pre-flight checks ─────────────────────────────────────────────────────────
 [ -f GOAL.md ]  || die "GOAL.md not found in $PROJECT_PATH. Run: bash $SCRIPT_DIR/setup.sh"
 [ -f score.sh ] || die "score.sh not found in $PROJECT_PATH. Run: bash $SCRIPT_DIR/setup.sh"
@@ -153,12 +253,34 @@ fi
 touch "$LOG_DIR/iterations.jsonl"
 
 # ── State ─────────────────────────────────────────────────────────────────────
+STATE_FILE="$PROJECT_PATH/STATE.sh"
+MEMORY_FILE="$PROJECT_PATH/MEMORY.md"
+DECISIONS_FILE="$PROJECT_PATH/DECISIONS.md"
+MEMORY_MAX_LINES=$(_cfg loop.memory_max_lines 80)
 score=0
 best_score=0
 prev_score=0
 no_improve_count=0
 exit_code=0
 iter=0
+TOTAL_ITERATIONS=0
+EMPTY_SUMMARY_COUNT=0
+CONDENSE_MODE=false
+
+if [ -f "$STATE_FILE" ]; then
+  source "$STATE_FILE" 2>/dev/null || log "WARNING: corrupt STATE.sh — starting fresh"
+  if [ "${HEPH_STATE_VERSION:-0}" != "1" ]; then
+    log "WARNING: STATE.sh version mismatch — starting fresh"
+    score=0; best_score=0; TOTAL_ITERATIONS=0; no_improve_count=0
+  else
+    score=${HEPH_CURRENT_SCORE:-0}
+    best_score=${HEPH_BEST_SCORE:-0}
+    prev_score=${HEPH_CURRENT_SCORE:-0}
+    no_improve_count=${HEPH_NO_IMPROVE_COUNT:-0}
+    TOTAL_ITERATIONS=${HEPH_TOTAL_ITERATIONS:-0}
+    log "Restored state from STATE.sh (best_score=$best_score, total_iters=$TOTAL_ITERATIONS)"
+  fi
+fi
 
 # ── Seed COMMENTs.md if empty ─────────────────────────────────────────────────
 if [ ! -s COMMENTs.md ]; then
@@ -173,7 +295,51 @@ Catalog and apply it. Report what you changed in SUMMARY.md.
 EOF
 fi
 
-# ── Main loop ─────────────────────────────────────────────────────────────────
+# ── Seed MEMORY.md if missing ────────────────────────────────────────────────
+if [ ! -f "$MEMORY_FILE" ]; then
+  cat > "$MEMORY_FILE" << 'MEMEOF'
+# Workflow Memory
+Last updated: (not yet)
+Session: (not yet) | Total iterations across all sessions: 0
+
+## Current State
+- Score: (unknown) / 100 (best ever: 0)
+- Status: STARTING
+- Goal target: 95
+
+## Score Trajectory (last 10 iterations)
+| # | Score | Delta | Result | Action |
+|---|-------|-------|--------|--------|
+| (no iterations yet) |
+
+## What Has Been Tried
+- (nothing yet)
+
+## Key Observations
+- (awaiting first scoring run)
+
+## Next Priority Actions
+1. Run score.sh to establish baseline
+2. Follow COMMENTs.md initial instructions
+
+## Blocked / Do Not Attempt
+- (nothing yet)
+MEMEOF
+  log "Created MEMORY.md"
+fi
+
+# ── Seed DECISIONS.md if missing ──────────────────────────────────────────────
+if [ ! -f "$DECISIONS_FILE" ]; then
+  GOAL_TITLE=$(head -1 GOAL.md | sed 's/^# //')
+  cat > "$DECISIONS_FILE" << DECEOF
+# Workflow Decisions
+These decisions are authoritative. Do not contradict them.
+
+1. [USER] Goal: ${GOAL_TITLE}
+2. [SYSTEM] Scoring method: bash score.sh (see GOAL.md Fitness Function)
+DECEOF
+  log "Created DECISIONS.md"
+fi
 log "Project      : $PROJECT_NAME ($PROJECT_PATH)"
 log "Logs         : $LOG_DIR"
 log "Starting loop | target=$TARGET_SCORE max_iter=$MAX_ITER no_improve_limit=$NO_IMPROVE_LIMIT"
@@ -184,10 +350,43 @@ for iter in $(seq 1 "$MAX_ITER"); do
 
   # ── WORKER step ──────────────────────────────────────────────────────────
   log "Worker ($WORKER_TOOL) starting..."
+
+  if [ ! -f SUMMARY.md ] || [ ! -s SUMMARY.md ]; then
+    EMPTY_SUMMARY_COUNT=$(( EMPTY_SUMMARY_COUNT + 1 ))
+  else
+    EMPTY_SUMMARY_COUNT=0
+  fi
+
+  CONDENSE_THRESHOLD=$(_cfg loop.condense_after_empty 3)
+  if (( EMPTY_SUMMARY_COUNT >= CONDENSE_THRESHOLD )) && (( CONDENSE_THRESHOLD > 0 )); then
+    CONDENSE_MODE=true
+    log "Condensation active (${EMPTY_SUMMARY_COUNT} empty summaries)"
+  else
+    CONDENSE_MODE=false
+  fi
+
   WORKER_ROLE_EXPANDED="$(echo "$WORKER_ROLE" | sed "s|{SCORE}|${best_score}|g; s|{TARGET}|${TARGET_SCORE}|g")"
-  FULL_WORKER_PROMPT="${WORKER_ROLE_EXPANDED}
+
+  if $CONDENSE_MODE; then
+    FULL_WORKER_PROMPT="You are the Worker. Read GOAL.md and COMMENTs.md in the project directory.
+Apply the single most important improvement. Write a brief SUMMARY.md when done.
+Project: ${PROJECT_PATH}
+Current score: ${score}/${TARGET_SCORE}.
+$(grep -A3 '## Next Priority' "$MEMORY_FILE" 2>/dev/null | head -3 || echo 'Follow COMMENTs.md instructions')"
+  else
+    MEMORY_CONTENT="$(cat "$MEMORY_FILE" 2>/dev/null || echo '(no memory)')"
+    DECISIONS_CONTENT="$(cat "$DECISIONS_FILE" 2>/dev/null || echo '(none)')"
+    FULL_WORKER_PROMPT="${WORKER_ROLE_EXPANDED}
 
 Project directory: ${PROJECT_PATH}
+
+---
+WORKFLOW DECISIONS (authoritative — do not contradict):
+${DECISIONS_CONTENT}
+
+---
+WORKFLOW MEMORY (where we are, what's been tried):
+${MEMORY_CONTENT}
 
 ---
 GOAL (GOAL.md):
@@ -196,6 +395,7 @@ $(cat GOAL.md)
 ---
 CURRENT FEEDBACK (COMMENTs.md):
 $(cat COMMENTs.md)"
+  fi
 
   if $DRY_RUN; then
     log "  [DRY-RUN] Would run: $WORKER_TOOL $WORKER_FLAGS '<prompt>'"
@@ -216,6 +416,20 @@ $(cat COMMENTs.md)"
   fi
   log "Score: $score / 100 (best so far: $best_score)"
 
+  # ── Persist state to STATE.sh ────────────────────────────────────────────
+  ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  TOTAL_ITERATIONS=$(( TOTAL_ITERATIONS + 1 ))
+  cat > "$STATE_FILE" << STATEOF
+HEPH_STATE_VERSION=1
+HEPH_TOTAL_ITERATIONS=${TOTAL_ITERATIONS}
+HEPH_BEST_SCORE=${best_score}
+HEPH_CURRENT_SCORE=${score}
+HEPH_NO_IMPROVE_COUNT=${no_improve_count}
+HEPH_LAST_SESSION_TS="${SESSION_TS}"
+HEPH_LAST_ITER_TS="${ts}"
+HEPH_STATUS="RUNNING"
+STATEOF
+
   # ── Check stopping condition: target reached ──────────────────────────────
   if (( score >= TARGET_SCORE )); then
     notify "Target ${TARGET_SCORE} reached! Final score: ${score}. Done in ${iter} iterations."
@@ -224,7 +438,6 @@ $(cat COMMENTs.md)"
   fi
 
   # ── Commit or revert ──────────────────────────────────────────────────────
-  ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   kept=false
   delta=$(( score - best_score ))
 
@@ -270,13 +483,20 @@ $(cat COMMENTs.md)"
   REVIEWER_PROMPT="$(echo "$REVIEWER_ROLE" \
     | sed "s|{SCORE}|${score}|g; s|{TARGET}|${TARGET_SCORE}|g")
 
+WORKFLOW DECISIONS (authoritative):
+$(cat "$DECISIONS_FILE" 2>/dev/null || echo '(none)')
+
+WORKFLOW MEMORY:
+$(cat "$MEMORY_FILE" 2>/dev/null || echo '(no memory)')
+
 GOAL.md contents:
 $(cat GOAL.md)
 
 SUMMARY.md contents:
 $(cat SUMMARY.md 2>/dev/null || echo '(empty — worker has not written yet)')
 
-Write your feedback to COMMENTs.md. Be specific: name files, line numbers, and exact actions."
+Write your feedback to COMMENTs.md. Be specific: name files, line numbers, and exact actions.
+Include a clear 'Next Priority Action' line for the Worker."
 
   if $DRY_RUN; then
     log "  [DRY-RUN] Would run: $REVIEWER_TOOL $REVIEWER_FLAGS '<prompt>' > COMMENTs.md"
@@ -287,12 +507,25 @@ Write your feedback to COMMENTs.md. Be specific: name files, line numbers, and e
   fi
 
   log "Reviewer wrote COMMENTs.md ($(wc -l < COMMENTs.md) lines)"
+
+  # ── Update workflow memory ─────────────────────────────────────────────────
+  update_memory
 done
 
 # ── Final summary ─────────────────────────────────────────────────────────────
 if (( iter >= MAX_ITER )) && (( exit_code != 0 )); then
   notify "Max iterations ($MAX_ITER) reached. Best score: ${best_score}/100."
   exit_code=2
+fi
+
+if [ -f "$STATE_FILE" ]; then
+  case $exit_code in
+    0) status="COMPLETE" ;;
+    1) status="PLATEAU" ;;
+    2) status="TIMEOUT" ;;
+    *) status="UNKNOWN" ;;
+  esac
+  sed -i "s/^HEPH_STATUS=.*/HEPH_STATUS=\"${status}\"/" "$STATE_FILE"
 fi
 
 log "━━━ Loop complete ━━━"
