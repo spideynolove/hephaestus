@@ -66,27 +66,6 @@ except Exception as e:
 "
 }
 
-# Quick liveness test: returns 0 if API responds, 1 otherwise.
-# Args: key base_url model
-test_api() {
-  local _key="$1" _base="$2" _model="$3"
-  OR_KEY="$_key" OR_BASE_URL="$_base" GEN_MODEL="$_model" \
-  python3 -c "
-import json, sys, urllib.request, os
-key   = os.environ['OR_KEY']
-base  = os.environ.get('OR_BASE_URL', 'https://openrouter.ai/api/v1')
-model = os.environ.get('GEN_MODEL', '')
-data  = json.dumps({'model': model, 'messages': [{'role': 'user', 'content': 'respond with exactly: ok'}], 'max_tokens': 5}).encode()
-req   = urllib.request.Request(base + '/chat/completions', data=data,
-          headers={'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'})
-try:
-    r = json.loads(urllib.request.urlopen(req, timeout=20).read())
-    content = r['choices'][0]['message']['content'].strip().lower()
-    sys.exit(0 if 'ok' in content else 1)
-except Exception as e:
-    print(str(e), file=sys.stderr); sys.exit(1)
-" 2>/dev/null
-}
 
 # ── Banner ────────────────────────────────────────────────────────────────────
 clear
@@ -159,6 +138,7 @@ case "$PROVIDER_CHOICE" in
     echo "  OpenRouter API key — get one at https://openrouter.ai/keys"
     echo ""
     askp "API key (sk-or-v1-...)" OR_KEY
+    OR_KEY="$(printf '%s' "$OR_KEY" | tr -d '[:space:]')"
     echo ""
     echo "  Worker model executes code changes. Reviewer model writes feedback."
     echo ""
@@ -205,6 +185,7 @@ case "$PROVIDER_CHOICE" in
     echo ""
     ask "Base URL (OpenAI-compatible, e.g. https://api.deepseek.com/v1)" OR_BASE_URL
     askp "API key" OR_KEY
+    OR_KEY="$(printf '%s' "$OR_KEY" | tr -d '[:space:]')"
     echo ""
     ask "Worker model" WORKER_MODEL
     ask "Reviewer model" REVIEWER_MODEL
@@ -238,12 +219,31 @@ echo ""
 
 API_OK=false
 if [ -n "$OR_KEY" ]; then
-  echo "  Testing ${WORKER_MODEL} via ${OR_BASE_URL} ..."
-  if test_api "$OR_KEY" "$OR_BASE_URL" "$GEN_MODEL"; then
+  echo "  Testing ${GEN_MODEL} via ${OR_BASE_URL} ..."
+  _api_err=$(OR_KEY="$OR_KEY" OR_BASE_URL="$OR_BASE_URL" GEN_MODEL="$GEN_MODEL" \
+    python3 -c "
+import json, sys, urllib.request, os
+key   = os.environ['OR_KEY']
+base  = os.environ.get('OR_BASE_URL', 'https://openrouter.ai/api/v1')
+model = os.environ.get('GEN_MODEL', '')
+data  = json.dumps({'model': model, 'messages': [{'role': 'user', 'content': 'respond with exactly: ok'}], 'max_tokens': 5}).encode()
+req   = urllib.request.Request(base + '/chat/completions', data=data,
+          headers={'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'})
+try:
+    r = json.loads(urllib.request.urlopen(req, timeout=45).read())
+    content = r['choices'][0]['message']['content'].strip().lower()
+    sys.exit(0 if 'ok' in content else 1)
+except urllib.error.HTTPError as e:
+    print('HTTP ' + str(e.code) + ': ' + e.read().decode()[:200], file=sys.stderr); sys.exit(1)
+except Exception as e:
+    print(str(e), file=sys.stderr); sys.exit(1)
+" 2>&1 >/dev/null) && _api_ok=true || _api_ok=false
+
+  if $_api_ok; then
     ok "API connection successful"
     API_OK=true
   else
-    err "API test failed — check your key and model name"
+    err "API test failed: ${_api_err}"
     echo ""
     ask "Continue anyway? [y/N]" CONT
     [[ "$CONT" =~ ^[Yy]$ ]] || { echo "  Aborted."; exit 1; }
