@@ -47,30 +47,20 @@ print(v)
 " 2>/dev/null || echo "$2"
 }
 
-# ── Provider overrides from .env ──────────────────────────────────────────────
-WORKER_TOOL_ENV_OVERRIDE="${WORKER_TOOL_OVERRIDE:-}"
-WORKER_MODEL_ENV_OVERRIDE="${WORKER_MODEL:-}"
-
+# ── Config: .env values (written by setup.sh) take priority over config.yaml ──
 MAX_ITER=$(_cfg loop.max_iterations 20)
 NO_IMPROVE_LIMIT=$(_cfg loop.no_improve_limit 5)
 TARGET_SCORE=$(_cfg loop.target_score 95)
 REVERT_ON_REGRESSION=$(_cfg loop.revert_on_regression true)
 
-WORKER_TOOL=$(_cfg agents.worker.tool codex)
-WORKER_FLAGS=$(_cfg agents.worker.flags "--quiet --auto-edit")
+# WORKER_TOOL / WORKER_FLAGS / REVIEWER_TOOL / REVIEWER_FLAGS are set by setup.sh
+# into .env and sourced above. Only fall back to config.yaml when not set.
+WORKER_TOOL="${WORKER_TOOL:-$(_cfg agents.worker.tool codex)}"
+WORKER_FLAGS="${WORKER_FLAGS:-$(_cfg agents.worker.flags 'exec --full-auto')}"
 WORKER_ROLE=$(_cfg agents.worker.role_description "Read GOAL.md and COMMENTs.md. Apply improvements. Write progress to SUMMARY.md.")
-WORKER_FLAGS_CLAUDE_OVERRIDE=$(_cfg agents.worker.flags_claude_override "--print")
 
-if [ -n "$WORKER_TOOL_ENV_OVERRIDE" ]; then
-  WORKER_TOOL="$WORKER_TOOL_ENV_OVERRIDE"
-  WORKER_FLAGS="$WORKER_FLAGS_CLAUDE_OVERRIDE"
-fi
-if [ -n "$WORKER_MODEL_ENV_OVERRIDE" ]; then
-  WORKER_FLAGS="${WORKER_FLAGS%% -m *} -m $WORKER_MODEL_ENV_OVERRIDE"
-fi
-
-REVIEWER_TOOL=$(_cfg agents.reviewer.tool claude)
-REVIEWER_FLAGS=$(_cfg agents.reviewer.flags "--print")
+REVIEWER_TOOL="${REVIEWER_TOOL:-$(_cfg agents.reviewer.tool claude)}"
+REVIEWER_FLAGS="${REVIEWER_FLAGS:-$(_cfg agents.reviewer.flags '--print')}"
 REVIEWER_ROLE=$(_cfg agents.reviewer.role_description "Read SUMMARY.md and GOAL.md. Write feedback to COMMENTs.md.")
 
 # ── Argument overrides ────────────────────────────────────────────────────────
@@ -221,8 +211,9 @@ MEMEOF
 [ -f score.sh ] || die "score.sh not found in $PROJECT_PATH. Run: bash $SCRIPT_DIR/setup.sh"
 [ -x score.sh ] || chmod +x score.sh
 if ! $DRY_RUN; then
-  command -v "$WORKER_TOOL"   &>/dev/null || die "$WORKER_TOOL not found on PATH."
-  command -v "$REVIEWER_TOOL" &>/dev/null || die "$REVIEWER_TOOL not found on PATH."
+  # Use `type` to detect both binaries on PATH and shell functions (deepseek, glm, qwen, etc.)
+  type "$WORKER_TOOL"   &>/dev/null || log "WARNING: $WORKER_TOOL not found — will fail at runtime if not a shell function"
+  type "$REVIEWER_TOOL" &>/dev/null || log "WARNING: $REVIEWER_TOOL not found — will fail at runtime if not a shell function"
 fi
 command -v python3 &>/dev/null || die "python3 required for config parsing."
 if ! python3 -c "import yaml" 2>/dev/null; then
