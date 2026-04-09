@@ -316,31 +316,52 @@ if [ "$GOAL_ACTION" = "create" ]; then
   done
   echo ""
 
-  AI_GENERATED=false
+  # ── Pick generation method ───────────────────────────────────────────────
+  echo "  How should GOAL.md + score.sh be generated?"
+  echo ""
   if [ -n "$OR_KEY" ] && $API_OK; then
-    echo "  Generating GOAL.md + score.sh via ${GEN_MODEL} ..."
-    echo ""
+    echo "  1) REST API    — fast chat call to ${GEN_MODEL} via /api/v1/chat/completions"
+  else
+    echo "  1) REST API    — (no API configured, unavailable)"
+  fi
+  command -v codex  &>/dev/null && echo "  2) codex       — agentic, explores your project and writes files directly" \
+                                || echo "  2) codex       — (not on PATH, unavailable)"
+  command -v claude &>/dev/null && echo "  3) claude-code — agentic, uses tool calls to write files directly" \
+                                || echo "  3) claude-code — (not on PATH, unavailable)"
+  echo "  4) Template    — questionnaire only, no AI"
+  echo ""
+  ask "Choice [1-4]" GEN_METHOD_CHOICE
 
-    _ctx_section=""
-    if [ -n "$USER_CONTEXT" ]; then
-      _ctx_section="The user has provided this goal/analysis — use it to drive the fitness function and action catalog:
+  _ctx_section=""
+  if [ -n "$USER_CONTEXT" ]; then
+    _ctx_section="The user provided this goal/analysis — use it to drive the fitness function and action catalog:
 
 ${USER_CONTEXT}---
 "
-    fi
+  fi
 
-    # Gather project context from disk
-    _proj_context="Directory listing (2 levels):\n$(ls -la "$PROJECT_PATH" 2>/dev/null)\n\n"
-    for _cfg in pyproject.toml setup.cfg setup.py package.json go.mod Cargo.toml Makefile requirements.txt; do
-      [ -f "$PROJECT_PATH/$_cfg" ] && \
-        _proj_context="${_proj_context}=== $_cfg ===\n$(head -60 "$PROJECT_PATH/$_cfg")\n\n"
-    done
-    _test_file=$(find "$PROJECT_PATH" -maxdepth 3 \
-      \( -name "test_*.py" -o -name "*.test.ts" -o -name "*.spec.js" \) 2>/dev/null | head -1)
-    [ -n "$_test_file" ] && \
-      _proj_context="${_proj_context}=== sample test: $_test_file ===\n$(head -30 "$_test_file")\n\n"
+  AI_GENERATED=false
 
-    AI_PROMPT=$(cat << AIPROMPT_EOF
+  case "${GEN_METHOD_CHOICE:-1}" in
+    # ── Method 1: REST API (/api/v1/chat/completions) ─────────────────────
+    1)
+      if [ -z "$OR_KEY" ] || ! $API_OK; then
+        err "No API configured — falling back to template"
+      else
+        echo ""
+        echo "  Calling ${GEN_MODEL} via REST API ..."
+
+        _proj_context="Directory listing:\n$(ls -la "$PROJECT_PATH" 2>/dev/null)\n\n"
+        for _cfg in pyproject.toml setup.cfg setup.py package.json go.mod Cargo.toml Makefile requirements.txt; do
+          [ -f "$PROJECT_PATH/$_cfg" ] && \
+            _proj_context="${_proj_context}=== $_cfg ===\n$(head -60 "$PROJECT_PATH/$_cfg")\n\n"
+        done
+        _test_file=$(find "$PROJECT_PATH" -maxdepth 3 \
+          \( -name "test_*.py" -o -name "*.test.ts" -o -name "*.spec.js" \) 2>/dev/null | head -1)
+        [ -n "$_test_file" ] && \
+          _proj_context="${_proj_context}=== sample test: $_test_file ===\n$(head -30 "$_test_file")\n\n"
+
+        AI_PROMPT=$(cat << AIPROMPT_EOF
 IMPORTANT: Plain-text generation task. Do NOT use any tools. Do NOT write files. Output raw text only.
 
 You are generating configuration for a hephaestus Worker-Reviewer loop.
@@ -350,13 +371,12 @@ Project directory: ${PROJECT_PATH}
 ${_ctx_section}Project files collected from disk:
 $(printf '%b' "$_proj_context")
 
-Read the above project context to understand its language, test runner, linter, and coverage tools.
 Respond with ONLY the two sections below — no preamble, no explanation.
 
 === GOAL.md ===
 A GOAL.md tailored to this project with:
 - Fitness function grounded in what this project actually measures
-- Concrete stopping conditions and target score
+- Concrete stopping conditions and target score (default 90)
 - Improvement Loop (step-by-step)
 - Action Catalog with specific actionable items for this project's actual gaps
 - Constraints from the project's actual requirements
@@ -373,31 +393,91 @@ A bash script that:
 Respond now starting with: === GOAL.md ===
 AIPROMPT_EOF
 )
+        export OR_KEY OR_BASE_URL GEN_MODEL
+        AI_OUTPUT=$(ai_run_prompt "$AI_PROMPT" 2>&1) || true
 
-    export OR_KEY OR_BASE_URL GEN_MODEL
-    AI_OUTPUT=$(ai_run_prompt "$AI_PROMPT" 2>&1) || true
+        GOAL_CONTENT=$(echo "$AI_OUTPUT" | awk '/^=== GOAL\.md ===$/{f=1;next} /^=== score\.sh ===$/{f=0} f')
+        SCORE_CONTENT=$(echo "$AI_OUTPUT" | awk '/^=== score\.sh ===$/{f=1;next} /^===[^=]/{f=0} f')
 
-    GOAL_CONTENT=$(echo "$AI_OUTPUT" | awk '/^=== GOAL\.md ===$/{f=1;next} /^=== score\.sh ===$/{f=0} f')
-    SCORE_CONTENT=$(echo "$AI_OUTPUT" | awk '/^=== score\.sh ===$/{f=1;next} /^===[^=]/{f=0} f')
+        if [ -n "$GOAL_CONTENT" ]; then
+          printf '%s\n' "$GOAL_CONTENT" > "$PROJECT_PATH/GOAL.md"
+          ok "GOAL.md written"
+          AI_GENERATED=true
+        else
+          err "Could not parse GOAL.md from output — falling back to template"
+        fi
+        if [ -n "$SCORE_CONTENT" ]; then
+          printf '%s\n' "$SCORE_CONTENT" > "$PROJECT_PATH/score.sh"
+          chmod +x "$PROJECT_PATH/score.sh"
+          ok "score.sh written"
+        else
+          err "Could not parse score.sh — will use template"
+        fi
+      fi
+      ;;
 
-    if [ -n "$GOAL_CONTENT" ]; then
-      printf '%s\n' "$GOAL_CONTENT" > "$PROJECT_PATH/GOAL.md"
-      ok "GOAL.md generated"
-      AI_GENERATED=true
-    else
-      err "Could not parse GOAL.md from AI output — using template"
-    fi
+    # ── Method 2: codex (agentic, /api/v1 endpoint) ───────────────────────
+    2)
+      if ! command -v codex &>/dev/null; then
+        err "codex not on PATH — falling back to template"
+      else
+        echo ""
+        echo "  Running codex in ${PROJECT_PATH} ..."
+        _codex_prompt="You are setting up a hephaestus Worker-Reviewer loop for this project.
 
-    if [ -n "$SCORE_CONTENT" ]; then
-      printf '%s\n' "$SCORE_CONTENT" > "$PROJECT_PATH/score.sh"
-      chmod +x "$PROJECT_PATH/score.sh"
-      ok "score.sh generated"
-    else
-      err "Could not parse score.sh — using template"
-    fi
-  else
-    err "No API configured — using template"
-  fi
+${_ctx_section}Analyze this project directory (${PROJECT_PATH}) — read the source files, tests, config files, and build system.
+
+Create two files in ${PROJECT_PATH}/:
+
+1. GOAL.md — fitness function, stopping conditions (target score 90), improvement loop steps, action catalog tailored to this project's actual gaps, constraints.
+
+2. score.sh — executable bash script (chmod +x) that:
+   - Outputs a single integer 0-100 to stdout
+   - Accepts --json flag returning {\"score\":N,\"tests\":N,\"lint\":N,\"coverage\":N}
+   - Uses this project's actual test/lint/coverage commands (detect from project files)
+   - Writes breakdown to stderr
+
+Write both files directly. Do not explain."
+
+        (cd "$PROJECT_PATH" && codex exec --full-auto "$_codex_prompt") || true
+        [ -f "$PROJECT_PATH/GOAL.md"  ] && { ok "GOAL.md written by codex";  AI_GENERATED=true; } \
+                                        || err "codex did not create GOAL.md — falling back to template"
+        [ -f "$PROJECT_PATH/score.sh" ] && { chmod +x "$PROJECT_PATH/score.sh"; ok "score.sh written by codex"; } \
+                                        || err "codex did not create score.sh — will use template"
+      fi
+      ;;
+
+    # ── Method 3: claude-code (agentic, /api endpoint) ────────────────────
+    3)
+      if ! command -v claude &>/dev/null; then
+        err "claude not on PATH — falling back to template"
+      else
+        echo ""
+        echo "  Running claude-code in ${PROJECT_PATH} ..."
+        _claude_prompt="You are setting up a hephaestus Worker-Reviewer loop for this project.
+
+${_ctx_section}Analyze this project directory (${PROJECT_PATH}) — read the source files, tests, config files, and build system.
+
+Create two files in ${PROJECT_PATH}/:
+
+1. GOAL.md — fitness function, stopping conditions (target score 90), improvement loop steps, action catalog tailored to this project's actual gaps, constraints.
+
+2. score.sh — executable bash script (chmod +x) that:
+   - Outputs a single integer 0-100 to stdout
+   - Accepts --json flag returning {\"score\":N,\"tests\":N,\"lint\":N,\"coverage\":N}
+   - Uses this project's actual test/lint/coverage commands (detect from project files)
+   - Writes breakdown to stderr
+
+Write both files directly using your file-writing tools. Do not explain."
+
+        (cd "$PROJECT_PATH" && claude --dangerously-skip-permissions "$_claude_prompt") || true
+        [ -f "$PROJECT_PATH/GOAL.md"  ] && { ok "GOAL.md written by claude-code";  AI_GENERATED=true; } \
+                                        || err "claude-code did not create GOAL.md — falling back to template"
+        [ -f "$PROJECT_PATH/score.sh" ] && { chmod +x "$PROJECT_PATH/score.sh"; ok "score.sh written by claude-code"; } \
+                                        || err "claude-code did not create score.sh — will use template"
+      fi
+      ;;
+  esac
 
   # ── Template fallback ─────────────────────────────────────────────────────
   if ! $AI_GENERATED; then
