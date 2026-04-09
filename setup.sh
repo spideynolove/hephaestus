@@ -19,6 +19,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# Load saved keys (non-fatal — file may not exist)
+[ -f ~/.secrets ] && source ~/.secrets 2>/dev/null || true
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 hr()  { echo ""; echo "────────────────────────────────────────────────"; }
 hdr() { hr; echo " $*"; hr; }
@@ -135,10 +138,16 @@ ENV_LINES=()
 case "$PROVIDER_CHOICE" in
   1)
     echo ""
-    echo "  OpenRouter API key — get one at https://openrouter.ai/keys"
-    echo ""
-    askp "API key (sk-or-v1-...)" OR_KEY
-    OR_KEY="$(printf '%s' "$OR_KEY" | tr -d '[:space:]')"
+    if [ -n "${OPENROUTER_API_KEY:-}" ]; then
+      OR_KEY="$(printf '%s' "$OPENROUTER_API_KEY" | tr -d '[:space:]')"
+      ok "Using OPENROUTER_API_KEY from ~/.secrets (${OR_KEY:0:12}...)"
+    else
+      echo "  OpenRouter API key — get one at https://openrouter.ai/keys"
+      echo ""
+      askp "API key (sk-or-v1-...)" OR_KEY
+      OR_KEY="$(printf '%s' "$OR_KEY" | tr -d '[:space:]')"
+      _SAVE_OR_KEY=true
+    fi
     echo ""
     echo "  Worker model executes code changes. Reviewer model writes feedback."
     echo ""
@@ -217,11 +226,9 @@ esac
 hdr "Step 2 of 5 — Testing API connection"
 echo ""
 
-API_OK=false
-if [ -n "$OR_KEY" ]; then
-  echo "  Testing ${GEN_MODEL} via ${OR_BASE_URL} ..."
-  _api_err=$(OR_KEY="$OR_KEY" OR_BASE_URL="$OR_BASE_URL" GEN_MODEL="$GEN_MODEL" \
-    python3 -c "
+_do_api_test() {
+  OR_KEY="$OR_KEY" OR_BASE_URL="$OR_BASE_URL" GEN_MODEL="$GEN_MODEL" \
+  python3 -c "
 import json, sys, urllib.request, os
 key   = os.environ['OR_KEY']
 base  = os.environ.get('OR_BASE_URL', 'https://openrouter.ai/api/v1')
@@ -237,17 +244,51 @@ except urllib.error.HTTPError as e:
     print('HTTP ' + str(e.code) + ': ' + e.read().decode()[:200], file=sys.stderr); sys.exit(1)
 except Exception as e:
     print(str(e), file=sys.stderr); sys.exit(1)
-" 2>&1 >/dev/null) && _api_ok=true || _api_ok=false
+"
+}
 
-  if $_api_ok; then
-    ok "API connection successful"
-    API_OK=true
-  else
-    err "API test failed: ${_api_err}"
-    echo ""
-    ask "Continue anyway? [y/N]" CONT
-    [[ "$CONT" =~ ^[Yy]$ ]] || { echo "  Aborted."; exit 1; }
-  fi
+API_OK=false
+if [ -n "$OR_KEY" ]; then
+  _api_retry=true
+  while $_api_retry; do
+    echo "  Testing ${GEN_MODEL} via ${OR_BASE_URL} ..."
+    _api_err=$(_do_api_test 2>&1 >/dev/null) && _api_ok=true || _api_ok=false
+
+    if $_api_ok; then
+      ok "API connection successful"
+      API_OK=true
+      _api_retry=false
+      # Offer to save a newly entered key to ~/.secrets
+      if [ "${_SAVE_OR_KEY:-false}" = "true" ]; then
+        echo ""
+        ask "Save key to ~/.secrets for future runs? [Y/n]" _SAVE_CHOICE
+        if [[ ! "${_SAVE_CHOICE}" =~ ^[Nn]$ ]]; then
+          if grep -q 'OPENROUTER_API_KEY' ~/.secrets 2>/dev/null; then
+            sed -i "s|^export OPENROUTER_API_KEY=.*|export OPENROUTER_API_KEY=${OR_KEY}|" ~/.secrets
+          else
+            echo "export OPENROUTER_API_KEY=${OR_KEY}" >> ~/.secrets
+          fi
+          ok "Saved to ~/.secrets"
+        fi
+      fi
+    else
+      err "API test failed: ${_api_err}"
+      echo ""
+      echo "  1) Re-enter the API key"
+      echo "  2) Continue anyway"
+      echo "  3) Abort"
+      ask "Choice [1-3]" _RETRY_CHOICE
+      case "${_RETRY_CHOICE}" in
+        1)
+          askp "API key" OR_KEY
+          OR_KEY="$(printf '%s' "$OR_KEY" | tr -d '[:space:]')"
+          _SAVE_OR_KEY=true
+          ;;
+        2) API_OK=true; _api_retry=false ;;
+        *) echo "  Aborted."; exit 1 ;;
+      esac
+    fi
+  done
 else
   ok "OAuth mode — skipping API test"
   API_OK=true
