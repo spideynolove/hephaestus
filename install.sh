@@ -53,28 +53,29 @@ else
   exec bash "$INSTALL_DIR/install.sh"
 fi
 
-# ── 2. Check python3 ──────────────────────────────────────────────────────────
-if ! command -v python3 &>/dev/null; then
-  err "python3 not found — install it first (https://python.org)"
+# ── 2. Install uv (Astral) ────────────────────────────────────────────────────
+if ! command -v uv &>/dev/null; then
+  log "Installing uv..."
+  curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1
+  export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+fi
+if ! command -v uv &>/dev/null; then
+  err "uv install failed — install manually: https://docs.astral.sh/uv/getting-started/installation/"
   exit 1
 fi
-ok "python3 $(python3 --version 2>&1 | awk '{print $2}')"
+ok "uv $(uv --version 2>&1 | awk '{print $2}')"
 
-# ── 3. Install pyyaml ────────────────────────────────────────────────────────
-_pip_try() { python3 -m pip install --quiet "$@" pyyaml >/dev/null 2>&1 || return 1; }
-if ! python3 -c "import yaml" 2>/dev/null; then
+# ── 3. Create venv + install pyyaml via uv ───────────────────────────────────
+VENV_DIR="$INSTALL_DIR/.venv"
+if [ ! -d "$VENV_DIR" ]; then
+  log "Creating Python venv..."
+  uv venv "$VENV_DIR" --quiet
+  ok "venv created at $VENV_DIR"
+fi
+if ! "$VENV_DIR/bin/python3" -c "import yaml" 2>/dev/null; then
   log "Installing pyyaml..."
-  if [ -n "${VIRTUAL_ENV:-}" ] && _pip_try; then
-    ok "pyyaml installed (venv)"
-  elif _pip_try --user; then
-    ok "pyyaml installed (--user)"
-  elif _pip_try --user --break-system-packages; then
-    ok "pyyaml installed (--break-system-packages)"
-  else
-    err "Could not install pyyaml automatically."
-    err "Activate a venv and re-run, or: pip install pyyaml"
-    exit 1
-  fi
+  uv pip install --quiet --python "$VENV_DIR" pyyaml
+  ok "pyyaml installed"
 else
   ok "pyyaml already present"
 fi

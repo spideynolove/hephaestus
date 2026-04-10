@@ -21,6 +21,12 @@ export HEPHAESTUS_RUNNING=1
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# ── Activate installer-managed venv (provides pyyaml, avoids PEP 668) ────────
+if [ -f "$SCRIPT_DIR/.venv/bin/activate" ]; then
+  # shellcheck source=/dev/null
+  source "$SCRIPT_DIR/.venv/bin/activate"
+fi
+
 # ── Load environment ──────────────────────────────────────────────────────────
 [ -f "$SCRIPT_DIR/.env" ] && source "$SCRIPT_DIR/.env"
 
@@ -217,7 +223,7 @@ if ! $DRY_RUN; then
 fi
 command -v python3 &>/dev/null || die "python3 required for config parsing."
 if ! python3 -c "import yaml" 2>/dev/null; then
-  log "WARNING: pyyaml not found — using built-in defaults (pip install pyyaml to enable config.yaml)"
+  log "WARNING: pyyaml not found — using built-in defaults (run install.sh to fix)"
 fi
 
 mkdir -p "$LOG_DIR"
