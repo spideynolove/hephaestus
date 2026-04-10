@@ -21,12 +21,6 @@ export HEPHAESTUS_RUNNING=1
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# ── Activate installer-managed venv (provides pyyaml, avoids PEP 668) ────────
-if [ -f "$SCRIPT_DIR/.venv/bin/activate" ]; then
-  # shellcheck source=/dev/null
-  source "$SCRIPT_DIR/.venv/bin/activate"
-fi
-
 # ── Load environment ──────────────────────────────────────────────────────────
 [ -f "$SCRIPT_DIR/.env" ] && source "$SCRIPT_DIR/.env"
 
