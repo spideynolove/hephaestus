@@ -221,9 +221,23 @@ _run_detection_block() {
       if $_goal_ok && $_score_ok; then
         _plain=$(bash "$PROJECT_PATH/score.sh" 2>/dev/null || true)
         _json=$(bash  "$PROJECT_PATH/score.sh" --json 2>/dev/null || true)
+        _brief="$PROJECT_PATH/.goal-brief.json"
         if echo "$_plain" | grep -qE "^[0-9]+$" && \
-           python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert isinstance(d.get(\"score\"),int)" \
-                      "$_json" 2>/dev/null; then
+           python3 - "$_brief" "$_json" 2>/dev/null <<'"'"'PYEOF'"'"'
+import json, sys, os
+brief_path, json_out = sys.argv[1], sys.argv[2]
+out = json.loads(json_out)
+assert isinstance(out.get("score"), int), "score not int"
+if os.path.exists(brief_path):
+    with open(brief_path) as f:
+        brief = json.load(f)
+    normalize = lambda c: c.lower().strip().replace(" ", "_")[:20]
+    expected = {normalize(c) for c in brief.get("capabilities", [])}
+    actual   = {normalize(k) for k in out.keys() if k != "score"}
+    missing  = expected - actual
+    assert not missing, "missing keys: " + str(sorted(missing))
+PYEOF
+        then
           GOAL_ACTION=keep
         fi
       fi
@@ -236,15 +250,30 @@ _run_detection_block() {
   ' PROJECT_PATH="$proj"
 }
 
-@test "setup.sh block: both files with valid provenance → GOAL_ACTION=keep" {
+@test "setup.sh block: both files with valid provenance + brief → GOAL_ACTION=keep" {
   mkdir -p "$BATS_TMPDIR/proj_keep"
   printf '# Goal: Test\n<!-- generated-by: goal-init.sh -->\n' \
     > "$BATS_TMPDIR/proj_keep/GOAL.md"
-  printf '#!/usr/bin/env bash\n# generated-by: goal-init.sh\n[[ "${1:-}" == "--json" ]] && echo '"'"'{"score":75}'"'"' || echo 75\n' \
+  printf '#!/usr/bin/env bash\n# generated-by: goal-init.sh\n[[ "${1:-}" == "--json" ]] && echo '"'"'{"score":75,"chain_control":75}'"'"' || echo 75\n' \
     > "$BATS_TMPDIR/proj_keep/score.sh"
   chmod +x "$BATS_TMPDIR/proj_keep/score.sh"
+  printf '{"purpose":"test","capabilities":["Chain Control"],"broken_signals":[],"gaps":[]}\n' \
+    > "$BATS_TMPDIR/proj_keep/.goal-brief.json"
   result=$(_run_detection_block "$BATS_TMPDIR/proj_keep")
   [ "$result" = "keep" ]
+}
+
+@test "setup.sh block: stale score.sh missing cap key → GOAL_ACTION stays create" {
+  mkdir -p "$BATS_TMPDIR/proj_stale"
+  printf '# Goal: Test\n<!-- generated-by: goal-init.sh -->\n' \
+    > "$BATS_TMPDIR/proj_stale/GOAL.md"
+  printf '#!/usr/bin/env bash\n# generated-by: goal-init.sh\n[[ "${1:-}" == "--json" ]] && echo '"'"'{"score":75}'"'"' || echo 75\n' \
+    > "$BATS_TMPDIR/proj_stale/score.sh"
+  chmod +x "$BATS_TMPDIR/proj_stale/score.sh"
+  printf '{"purpose":"test","capabilities":["Chain Control","Safety Gates"],"broken_signals":[],"gaps":[]}\n' \
+    > "$BATS_TMPDIR/proj_stale/.goal-brief.json"
+  result=$(_run_detection_block "$BATS_TMPDIR/proj_stale")
+  [ "$result" != "keep" ]
 }
 
 @test "setup.sh block: GOAL.md only (no score.sh) → GOAL_ACTION=create" {

@@ -115,9 +115,23 @@ if $_has_goal && $_has_score; then
   if $_goal_ok && $_score_ok; then
     _plain=$(bash "$PROJECT_PATH/score.sh" 2>/dev/null || true)
     _json=$(bash  "$PROJECT_PATH/score.sh" --json 2>/dev/null || true)
+    _brief="$PROJECT_PATH/.goal-brief.json"
     if echo "$_plain" | grep -qE '^[0-9]+$' && \
-       python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert isinstance(d.get('score'),int)" \
-                  "$_json" 2>/dev/null; then
+       python3 - "$_brief" "$_json" 2>/dev/null <<'PYEOF'
+import json, sys, os
+brief_path, json_out = sys.argv[1], sys.argv[2]
+out = json.loads(json_out)
+assert isinstance(out.get('score'), int), 'score not int'
+if os.path.exists(brief_path):
+    with open(brief_path) as f:
+        brief = json.load(f)
+    normalize = lambda c: c.lower().strip().replace(' ', '_')[:20]
+    expected = {normalize(c) for c in brief.get('capabilities', [])}
+    actual   = {normalize(k) for k in out.keys() if k != 'score'}
+    missing  = expected - actual
+    assert not missing, 'missing keys: ' + str(sorted(missing))
+PYEOF
+    then
       ok "GOAL.md + score.sh verified (provenance + smoke test) — skipping generation"
       GOAL_ACTION="keep"
     else
@@ -140,11 +154,11 @@ if $_has_goal && $_has_score; then
 elif $_has_goal && ! $_has_score; then
   echo "  GOAL.md exists but score.sh is missing — partial state."
   echo "  Run: goal-init.sh $PROJECT_PATH   (regenerates both)"
-  GOAL_ACTION="create"
+  exit 0
 elif ! $_has_goal && $_has_score; then
   echo "  score.sh exists but GOAL.md is missing — partial state."
   echo "  Run: goal-init.sh $PROJECT_PATH   (regenerates both)"
-  GOAL_ACTION="create"
+  exit 0
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════

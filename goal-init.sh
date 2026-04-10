@@ -7,8 +7,6 @@
 # Phase 2: agentic engine writes GOAL.md + score.sh from approved brief
 set -euo pipefail
 
-BRIEF_FILE="/tmp/goal-brief.json"
-
 # shellcheck source=/dev/null
 if [ -f ~/.secrets ]; then source ~/.secrets 2>/dev/null || true; fi
 
@@ -29,6 +27,7 @@ PROJECT_PATH="${1:-}"
 [ -z "$PROJECT_PATH" ] && { err "Usage: goal-init.sh <project-path>"; exit 1; }
 [ -d "$PROJECT_PATH" ] || { err "Not a directory: $PROJECT_PATH"; exit 1; }
 PROJECT_PATH="$(cd "$PROJECT_PATH" && pwd)"
+BRIEF_FILE="$PROJECT_PATH/.goal-brief.json"
 
 command -v repomix &>/dev/null || {
   err "repomix not found. Install: npm install -g repomix"
@@ -264,8 +263,9 @@ Instructions:
    - Capability key normalization (use exactly this rule):
        key = capability.lower().strip().replace(' ', '_')[:20]
      Expected keys: ${CAP_KEYS}
-   - --json flag must return: {\"score\":N, \"${CAP_KEYS//,*/}\":N, ...}
-     where every value is an integer 0..100 — no strings, no floats
+   - --json flag must return: {\"score\":N, \"<cap_key>\":N, ...} for every
+     expected key listed above — every value must be an integer 0..100,
+     no strings, no floats
    - Plain mode (no flag): print one integer to stdout
    - Breakdown to stderr in both modes
    - Do NOT write generic lint/coverage unless that IS a listed capability
