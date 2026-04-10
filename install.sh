@@ -80,14 +80,21 @@ else
   ok "pyyaml already present"
 fi
 
-# ── 4. Create heph command ────────────────────────────────────────────────────
+# ── 4. Create CLI commands ────────────────────────────────────────────────────
 mkdir -p "$BIN_DIR"
 cat > "$HEPH_CMD" << HEPHEOF
 #!/usr/bin/env bash
 exec bash "${INSTALL_DIR}/orchestrate.sh" "\$@"
 HEPHEOF
 chmod +x "$HEPH_CMD"
-ok "heph command → $HEPH_CMD"
+ok "heph → $HEPH_CMD"
+
+ln -sf "${INSTALL_DIR}/goal-init.sh" "$BIN_DIR/goal-init.sh"
+chmod +x "${INSTALL_DIR}/goal-init.sh"
+ok "goal-init.sh → $BIN_DIR/goal-init.sh"
+
+ln -sf "${INSTALL_DIR}/setup.sh" "$BIN_DIR/heph-setup"
+ok "heph-setup → $BIN_DIR/heph-setup"
 
 # ── 5. Ensure ~/.local/bin is in PATH ────────────────────────────────────────
 PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'
