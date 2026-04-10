@@ -56,8 +56,25 @@ ok "python3 $(python3 --version 2>&1 | awk '{print $2}')"
 # ── 3. Install pyyaml ────────────────────────────────────────────────────────
 if ! python3 -c "import yaml" 2>/dev/null; then
   log "Installing pyyaml..."
-  python3 -m pip install --quiet --user pyyaml
-  ok "pyyaml installed"
+  _yaml_ok=false
+  # Try in-venv install first (no flags needed)
+  if [ -n "${VIRTUAL_ENV:-}" ]; then
+    python3 -m pip install --quiet pyyaml 2>/dev/null && _yaml_ok=true
+  fi
+  # Try --user (works on standard pip)
+  if ! $_yaml_ok; then
+    python3 -m pip install --quiet --user pyyaml 2>/dev/null && _yaml_ok=true
+  fi
+  # PEP 668 systems (externally-managed env) — safe because it's --user
+  if ! $_yaml_ok; then
+    python3 -m pip install --quiet --user --break-system-packages pyyaml 2>/dev/null && _yaml_ok=true
+  fi
+  if $_yaml_ok; then
+    ok "pyyaml installed"
+  else
+    err "Could not install pyyaml. Activate a venv or run: pip install pyyaml"
+    exit 1
+  fi
 else
   ok "pyyaml already present"
 fi
@@ -93,7 +110,9 @@ echo "  ────────────────────────
 echo ""
 
 cd "$INSTALL_DIR"
-bash setup.sh
+# Redirect from /dev/tty so setup.sh can read interactive input even when
+# install.sh itself is being piped from curl (curl ... | bash).
+bash setup.sh </dev/tty
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 echo ""
