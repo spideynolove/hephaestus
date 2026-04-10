@@ -228,14 +228,14 @@ import json, sys, os
 brief_path, json_out = sys.argv[1], sys.argv[2]
 out = json.loads(json_out)
 assert isinstance(out.get("score"), int), "score not int"
-if os.path.exists(brief_path):
-    with open(brief_path) as f:
-        brief = json.load(f)
-    normalize = lambda c: c.lower().strip().replace(" ", "_")[:20]
-    expected = {normalize(c) for c in brief.get("capabilities", [])}
-    actual   = {normalize(k) for k in out.keys() if k != "score"}
-    missing  = expected - actual
-    assert not missing, "missing keys: " + str(sorted(missing))
+assert os.path.exists(brief_path), "brief not found — run goal-init.sh again"
+with open(brief_path) as f:
+    brief = json.load(f)
+normalize = lambda c: c.lower().strip().replace(" ", "_")[:20]
+expected = {normalize(c) for c in brief.get("capabilities", [])}
+actual   = {normalize(k) for k in out.keys() if k != "score"}
+missing  = expected - actual
+assert not missing, "missing keys: " + str(sorted(missing))
 PYEOF
         then
           GOAL_ACTION=keep
@@ -291,6 +291,18 @@ PYEOF
   chmod +x "$BATS_TMPDIR/proj_score_only/score.sh"
   result=$(_run_detection_block "$BATS_TMPDIR/proj_score_only")
   [ "$result" = "create" ]
+}
+
+@test "setup.sh block: valid provenance + score but no brief → GOAL_ACTION stays create" {
+  mkdir -p "$BATS_TMPDIR/proj_no_brief"
+  printf '# Goal: Test\n<!-- generated-by: goal-init.sh -->\n' \
+    > "$BATS_TMPDIR/proj_no_brief/GOAL.md"
+  printf '#!/usr/bin/env bash\n# generated-by: goal-init.sh\n[[ "${1:-}" == "--json" ]] && echo '"'"'{"score":75}'"'"' || echo 75\n' \
+    > "$BATS_TMPDIR/proj_no_brief/score.sh"
+  chmod +x "$BATS_TMPDIR/proj_no_brief/score.sh"
+  rm -f "$BATS_TMPDIR/proj_no_brief/.goal-brief.json"
+  result=$(_run_detection_block "$BATS_TMPDIR/proj_no_brief")
+  [ "$result" != "keep" ]
 }
 
 @test "setup.sh block: both files but no provenance markers → GOAL_ACTION stays create (no auto-keep)" {

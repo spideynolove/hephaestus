@@ -225,11 +225,11 @@ print(b.get(sys.argv[2], ''))
 
 PURPOSE=$(_brief_scalar purpose)
 CAP_KEYS=$(python3 -c "
-import json
-b = json.load(open('$BRIEF_FILE'))
+import json, sys
+b = json.load(open(sys.argv[1]))
 normalize = lambda c: c.lower().strip().replace(' ', '_')[:20]
 print(', '.join(normalize(c) for c in b.get('capabilities', [])))
-")
+" "$BRIEF_FILE")
 
 SEEDED_PROMPT="You are initializing a hephaestus Worker↔Reviewer loop.
 

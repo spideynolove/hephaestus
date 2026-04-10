@@ -122,14 +122,14 @@ import json, sys, os
 brief_path, json_out = sys.argv[1], sys.argv[2]
 out = json.loads(json_out)
 assert isinstance(out.get('score'), int), 'score not int'
-if os.path.exists(brief_path):
-    with open(brief_path) as f:
-        brief = json.load(f)
-    normalize = lambda c: c.lower().strip().replace(' ', '_')[:20]
-    expected = {normalize(c) for c in brief.get('capabilities', [])}
-    actual   = {normalize(k) for k in out.keys() if k != 'score'}
-    missing  = expected - actual
-    assert not missing, 'missing keys: ' + str(sorted(missing))
+assert os.path.exists(brief_path), 'brief not found — run goal-init.sh again'
+with open(brief_path) as f:
+    brief = json.load(f)
+normalize = lambda c: c.lower().strip().replace(' ', '_')[:20]
+expected = {normalize(c) for c in brief.get('capabilities', [])}
+actual   = {normalize(k) for k in out.keys() if k != 'score'}
+missing  = expected - actual
+assert not missing, 'missing keys: ' + str(sorted(missing))
 PYEOF
     then
       ok "GOAL.md + score.sh verified (provenance + smoke test) — skipping generation"
