@@ -20,7 +20,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # Load saved keys (non-fatal — file may not exist)
-[ -f ~/.secrets ] && source ~/.secrets 2>/dev/null || true
+# shellcheck source=/dev/null
+if [ -f ~/.secrets ]; then source ~/.secrets 2>/dev/null || true; fi
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 hr()  { echo ""; echo "────────────────────────────────────────────────"; }
@@ -102,15 +103,48 @@ fi
 ok "Project: $PROJECT_PATH"
 
 GOAL_ACTION="create"
-if [ -f "$PROJECT_PATH/GOAL.md" ]; then
-  echo ""
-  echo "  GOAL.md already exists."
-  echo ""
-  echo "  1) Keep existing GOAL.md"
-  echo "  2) Regenerate it"
-  echo ""
-  ask "Choice [1-2]" GOAL_ACTION_CHOICE
-  [[ "$GOAL_ACTION_CHOICE" == "2" ]] && GOAL_ACTION="create" || GOAL_ACTION="keep"
+_has_goal=false; _has_score=false
+[ -f "$PROJECT_PATH/GOAL.md"  ] && _has_goal=true
+[ -f "$PROJECT_PATH/score.sh" ] && _has_score=true
+
+if $_has_goal && $_has_score; then
+  _goal_ok=false; _score_ok=false
+  grep -q 'generated-by: goal-init.sh' "$PROJECT_PATH/GOAL.md"  2>/dev/null && _goal_ok=true
+  grep -q 'generated-by: goal-init.sh' "$PROJECT_PATH/score.sh" 2>/dev/null && _score_ok=true
+
+  if $_goal_ok && $_score_ok; then
+    _plain=$(bash "$PROJECT_PATH/score.sh" 2>/dev/null || true)
+    _json=$(bash  "$PROJECT_PATH/score.sh" --json 2>/dev/null || true)
+    if echo "$_plain" | grep -qE '^[0-9]+$' && \
+       python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert isinstance(d.get('score'),int)" \
+                  "$_json" 2>/dev/null; then
+      ok "GOAL.md + score.sh verified (provenance + smoke test) — skipping generation"
+      GOAL_ACTION="keep"
+    else
+      echo "  GOAL.md + score.sh have goal-init.sh provenance but score.sh is broken."
+      echo "  1) Keep anyway  2) Regenerate"
+      ask "Choice [1-2]" GOAL_ACTION_CHOICE
+      [[ "$GOAL_ACTION_CHOICE" == "2" ]] && GOAL_ACTION="create" || GOAL_ACTION="keep"
+    fi
+  else
+    echo "  GOAL.md and score.sh exist but were not created by goal-init.sh."
+    echo "  1) Keep existing files"
+    echo "  2) Exit — then run: goal-init.sh $PROJECT_PATH, then re-run setup.sh"
+    ask "Choice [1-2]" GOAL_ACTION_CHOICE
+    if [[ "$GOAL_ACTION_CHOICE" == "2" ]]; then
+      echo "  Run goal-init.sh $PROJECT_PATH first, then re-run setup.sh."
+      exit 0
+    fi
+    GOAL_ACTION="keep"
+  fi
+elif $_has_goal && ! $_has_score; then
+  echo "  GOAL.md exists but score.sh is missing — partial state."
+  echo "  Run: goal-init.sh $PROJECT_PATH   (regenerates both)"
+  GOAL_ACTION="create"
+elif ! $_has_goal && $_has_score; then
+  echo "  score.sh exists but GOAL.md is missing — partial state."
+  echo "  Run: goal-init.sh $PROJECT_PATH   (regenerates both)"
+  GOAL_ACTION="create"
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -440,10 +474,10 @@ Create two files in ${PROJECT_PATH}/:
 Write both files directly. Do not explain."
 
         (cd "$PROJECT_PATH" && codex exec --full-auto "$_codex_prompt") || true
-        [ -f "$PROJECT_PATH/GOAL.md"  ] && { ok "GOAL.md written by codex";  AI_GENERATED=true; } \
-                                        || err "codex did not create GOAL.md — falling back to template"
-        [ -f "$PROJECT_PATH/score.sh" ] && { chmod +x "$PROJECT_PATH/score.sh"; ok "score.sh written by codex"; } \
-                                        || err "codex did not create score.sh — will use template"
+        if [ -f "$PROJECT_PATH/GOAL.md"  ]; then ok "GOAL.md written by codex";  AI_GENERATED=true
+        else err "codex did not create GOAL.md — falling back to template"; fi
+        if [ -f "$PROJECT_PATH/score.sh" ]; then chmod +x "$PROJECT_PATH/score.sh"; ok "score.sh written by codex"
+        else err "codex did not create score.sh — will use template"; fi
       fi
       ;;
 
@@ -471,10 +505,10 @@ Create two files in ${PROJECT_PATH}/:
 Write both files directly using your file-writing tools. Do not explain."
 
         (cd "$PROJECT_PATH" && claude --dangerously-skip-permissions "$_claude_prompt") || true
-        [ -f "$PROJECT_PATH/GOAL.md"  ] && { ok "GOAL.md written by claude-code";  AI_GENERATED=true; } \
-                                        || err "claude-code did not create GOAL.md — falling back to template"
-        [ -f "$PROJECT_PATH/score.sh" ] && { chmod +x "$PROJECT_PATH/score.sh"; ok "score.sh written by claude-code"; } \
-                                        || err "claude-code did not create score.sh — will use template"
+        if [ -f "$PROJECT_PATH/GOAL.md"  ]; then ok "GOAL.md written by claude-code";  AI_GENERATED=true
+        else err "claude-code did not create GOAL.md — falling back to template"; fi
+        if [ -f "$PROJECT_PATH/score.sh" ]; then chmod +x "$PROJECT_PATH/score.sh"; ok "score.sh written by claude-code"
+        else err "claude-code did not create score.sh — will use template"; fi
       fi
       ;;
   esac
@@ -708,7 +742,7 @@ if [ -n "$DC_URL" ]; then
   HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$DC_URL" \
     -H 'Content-Type: application/json' \
     -d '{"content":"hephaestus setup test \u2713"}')
-  [[ "$HTTP_CODE" =~ ^2 ]] && ok "Discord" || err "Discord HTTP $HTTP_CODE (saved anyway)"
+  if [[ "$HTTP_CODE" =~ ^2 ]]; then ok "Discord"; else err "Discord HTTP $HTTP_CODE (saved anyway)"; fi
   NOTIF_LINES+=("DISCORD_WEBHOOK_URL=${DC_URL}")
 fi
 
