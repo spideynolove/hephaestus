@@ -44,13 +44,13 @@ if [ -d "$INSTALL_DIR/.git" ]; then
   # not the updated file on disk. Re-exec from disk so the rest of the script
   # uses the freshly-pulled version.
   if [ ! -t 0 ]; then
-    exec bash "$INSTALL_DIR/install.sh"
+    exec bash "$INSTALL_DIR/install.sh" </dev/tty
   fi
 else
   log "Cloning hephaestus..."
   git clone --quiet "$REPO" "$INSTALL_DIR"
   ok "Cloned to $INSTALL_DIR"
-  exec bash "$INSTALL_DIR/install.sh"
+  exec bash "$INSTALL_DIR/install.sh" </dev/tty
 fi
 
 # ── 2. Install uv (Astral) ────────────────────────────────────────────────────
