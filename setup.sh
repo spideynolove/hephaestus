@@ -30,19 +30,9 @@ ok()  { echo "  ✓ $*"; }
 err() { echo "  ✗ $*"; }
 ask() {
   printf "  %s: " "$1"; read -r "$2"
-  if [ -t 0 ]; then
-    while read -r -t 0.2 _drain; do :; done
-    sleep 0.1
-    while read -r -t 0.2 _drain; do :; done
-  fi
 }
 askp() {
   printf "  %s: " "$1"; read -rs "$2"; echo ""
-  if [ -t 0 ]; then
-    while read -r -t 0.2 _drain; do :; done
-    sleep 0.1
-    while read -r -t 0.2 _drain; do :; done
-  fi
 }
 
 # Call the LLM API (OpenRouter or compatible) with a plain-text prompt.
