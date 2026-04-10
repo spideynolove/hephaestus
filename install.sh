@@ -40,10 +40,17 @@ if [ -d "$INSTALL_DIR/.git" ]; then
   log "Updating existing install..."
   git -C "$INSTALL_DIR" pull --ff-only --quiet
   ok "Updated to latest"
+  # If running via `curl | bash`, bash is executing the bytes curl fetched —
+  # not the updated file on disk. Re-exec from disk so the rest of the script
+  # uses the freshly-pulled version.
+  if [ ! -t 0 ]; then
+    exec bash "$INSTALL_DIR/install.sh"
+  fi
 else
   log "Cloning hephaestus..."
   git clone --quiet "$REPO" "$INSTALL_DIR"
   ok "Cloned to $INSTALL_DIR"
+  exec bash "$INSTALL_DIR/install.sh"
 fi
 
 # ── 2. Check python3 ──────────────────────────────────────────────────────────
@@ -54,25 +61,18 @@ fi
 ok "python3 $(python3 --version 2>&1 | awk '{print $2}')"
 
 # ── 3. Install pyyaml ────────────────────────────────────────────────────────
+_pip_try() { python3 -m pip install --quiet "$@" pyyaml >/dev/null 2>&1 || return 1; }
 if ! python3 -c "import yaml" 2>/dev/null; then
   log "Installing pyyaml..."
-  _yaml_ok=false
-  # Try in-venv install first (no flags needed)
-  if [ -n "${VIRTUAL_ENV:-}" ]; then
-    python3 -m pip install --quiet pyyaml 2>/dev/null && _yaml_ok=true
-  fi
-  # Try --user (works on standard pip)
-  if ! $_yaml_ok; then
-    python3 -m pip install --quiet --user pyyaml 2>/dev/null && _yaml_ok=true
-  fi
-  # PEP 668 systems (externally-managed env) — safe because it's --user
-  if ! $_yaml_ok; then
-    python3 -m pip install --quiet --user --break-system-packages pyyaml 2>/dev/null && _yaml_ok=true
-  fi
-  if $_yaml_ok; then
-    ok "pyyaml installed"
+  if [ -n "${VIRTUAL_ENV:-}" ] && _pip_try; then
+    ok "pyyaml installed (venv)"
+  elif _pip_try --user; then
+    ok "pyyaml installed (--user)"
+  elif _pip_try --user --break-system-packages; then
+    ok "pyyaml installed (--break-system-packages)"
   else
-    err "Could not install pyyaml. Activate a venv or run: pip install pyyaml"
+    err "Could not install pyyaml automatically."
+    err "Activate a venv and re-run, or: pip install pyyaml"
     exit 1
   fi
 else
