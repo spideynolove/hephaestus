@@ -20,6 +20,7 @@ if [ -f "$_HEPH_DIR/.env" ]; then source "$_HEPH_DIR/.env" 2>/dev/null || true; 
 if [ -z "${OR_KEY:-}" ] && [ -n "${OPENROUTER_API_KEY:-}" ]; then
   OR_KEY="$OPENROUTER_API_KEY"
 fi
+export OR_KEY GEN_MODEL
 # default model for analysis phase if setup.sh hasn't run yet
 GEN_MODEL="${GEN_MODEL:-${WORKER_MODEL:-minimax/minimax-m2.7}}"
 
@@ -132,10 +133,14 @@ _run_phase1() {
   local prompt raw brief
   prompt=$(_build_phase1_prompt "$repomix_content" "$correction")
   for attempt in 1 2 3; do
-    raw=$(ai_run_prompt "$prompt" 2>/dev/null) || {
-      echo "  Attempt $attempt: API error — retrying..." >&2
+    local _err
+    _err=$(mktemp)
+    raw=$(ai_run_prompt "$prompt" 2>"$_err") || {
+      echo "  Attempt $attempt: API error — $(cat "$_err") — retrying..." >&2
+      rm -f "$_err"
       continue
     }
+    rm -f "$_err"
     brief=$(echo "$raw" | _extract_json) && { echo "$brief"; return 0; }
     echo "  Attempt $attempt: could not parse JSON — retrying..." >&2
   done

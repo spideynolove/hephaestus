@@ -205,7 +205,7 @@ case "$PROVIDER_CHOICE" in
       "OR_BASE_URL=${OR_BASE_URL}"
       "ANTHROPIC_BASE_URL=https://openrouter.ai/api"
       "ANTHROPIC_AUTH_TOKEN=${OR_KEY}"
-      "ANTHROPIC_API_KEY="
+      "ANTHROPIC_API_KEY=${OR_KEY}"
       "OPENAI_BASE_URL=${OR_BASE_URL}"
       "OPENAI_API_KEY=${OR_KEY}"
       "WORKER_MODEL=${WORKER_MODEL}"
@@ -709,9 +709,9 @@ fi
 
 ENV_LINES+=(
   "WORKER_TOOL=${WORKER_TOOL}"
-  "WORKER_FLAGS=${WORKER_FLAGS}"
+  "WORKER_FLAGS=\"${WORKER_FLAGS}\""
   "REVIEWER_TOOL=${REVIEWER_TOOL}"
-  "REVIEWER_FLAGS=${REVIEWER_FLAGS}"
+  "REVIEWER_FLAGS=\"${REVIEWER_FLAGS}\""
 )
 
 # ══════════════════════════════════════════════════════════════════════════════
