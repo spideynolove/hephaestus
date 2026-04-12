@@ -276,8 +276,9 @@ req   = urllib.request.Request(base + '/chat/completions', data=data,
           headers={'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'})
 try:
     r = json.loads(urllib.request.urlopen(req, timeout=45).read())
-    content = r['choices'][0]['message']['content'].strip().lower()
-    sys.exit(0 if 'ok' in content else 1)
+    msg = r['choices'][0]['message']
+    content = (msg.get('content') or msg.get('reasoning') or '').strip().lower()
+    sys.exit(0 if content else 1)
 except urllib.error.HTTPError as e:
     print('HTTP ' + str(e.code) + ': ' + e.read().decode()[:200], file=sys.stderr); sys.exit(1)
 except Exception as e:
@@ -315,16 +316,21 @@ if [ -n "$OR_KEY" ]; then
       echo "  1) Re-enter the API key"
       echo "  2) Continue anyway"
       echo "  3) Abort"
-      ask "Choice [1-3]" _RETRY_CHOICE
-      case "${_RETRY_CHOICE}" in
-        1)
-          askp "API key" OR_KEY
-          OR_KEY="$(printf '%s' "$OR_KEY" | tr -d '[:space:]')"
-          _SAVE_OR_KEY=true
-          ;;
-        2) API_OK=true; _api_retry=false ;;
-        *) echo "  Aborted."; exit 1 ;;
-      esac
+      _retry_valid=false
+      while ! $_retry_valid; do
+        ask "Choice [1-3]" _RETRY_CHOICE
+        case "${_RETRY_CHOICE}" in
+          1)
+            askp "API key" OR_KEY
+            OR_KEY="$(printf '%s' "$OR_KEY" | tr -d '[:space:]')"
+            _SAVE_OR_KEY=true
+            _retry_valid=true
+            ;;
+          2) API_OK=true; _api_retry=false; _retry_valid=true ;;
+          3) echo "  Aborted."; exit 1 ;;
+          *) echo "  Enter 1, 2, or 3." ;;
+        esac
+      done
     fi
   done
 else
