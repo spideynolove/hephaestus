@@ -20,6 +20,8 @@ if [ -f "$_HEPH_DIR/.env" ]; then source "$_HEPH_DIR/.env" 2>/dev/null || true; 
 if [ -z "${OR_KEY:-}" ] && [ -n "${OPENROUTER_API_KEY:-}" ]; then
   OR_KEY="$OPENROUTER_API_KEY"
 fi
+# default model for analysis phase if setup.sh hasn't run yet
+GEN_MODEL="${GEN_MODEL:-${WORKER_MODEL:-deepseek/deepseek-r1:free}}"
 
 hr()  { echo ""; echo "────────────────────────────────────────────────"; }
 hdr() { hr; echo " $*"; hr; }
