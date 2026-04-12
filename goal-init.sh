@@ -9,6 +9,17 @@ set -euo pipefail
 
 # shellcheck source=/dev/null
 if [ -f ~/.secrets ]; then source ~/.secrets 2>/dev/null || true; fi
+# ~/.secrets stores OPENROUTER_API_KEY; map to OR_KEY if not already set
+if [ -z "${OR_KEY:-}" ] && [ -n "${OPENROUTER_API_KEY:-}" ]; then
+  OR_KEY="$OPENROUTER_API_KEY"
+fi
+# load .env from hephaestus dir if present (provides GEN_MODEL etc.)
+_HEPH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$_HEPH_DIR/.env" ]; then source "$_HEPH_DIR/.env" 2>/dev/null || true; fi
+# still no OR_KEY? OR_KEY may come from .env as well
+if [ -z "${OR_KEY:-}" ] && [ -n "${OPENROUTER_API_KEY:-}" ]; then
+  OR_KEY="$OPENROUTER_API_KEY"
+fi
 
 hr()  { echo ""; echo "────────────────────────────────────────────────"; }
 hdr() { hr; echo " $*"; hr; }
@@ -16,11 +27,6 @@ ok()  { echo "  ✓ $*"; }
 err() { echo "  ✗ $*" >&2; }
 ask() {
   printf "  %s: " "$1"; read -r "$2"
-  if [ -t 0 ]; then
-    while read -r -t 0.2 _drain; do :; done
-    sleep 0.1
-    while read -r -t 0.2 _drain; do :; done
-  fi
 }
 
 PROJECT_PATH="${1:-}"
