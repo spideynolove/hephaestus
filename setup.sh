@@ -190,14 +190,14 @@ case "$PROVIDER_CHOICE" in
     echo "  Worker model executes code changes. Reviewer model writes feedback."
     echo ""
     echo "  Examples:"
-    echo "    qwen/qwen3-coder-480b:free   openai/gpt-5.3-codex"
-    echo "    google/gemini-2.5-pro        deepseek/deepseek-r1"
-    echo "    anthropic/claude-opus-4.6    minimax/minimax-m2.7"
+    echo "    qwen/qwen3.6-plus            minimax/minimax-m2.7"
+    echo "    google/gemini-2.5-pro        anthropic/claude-opus-4.6"
+    echo "    openai/gpt-5.3-codex         deepseek/deepseek-r1"
     echo ""
-    ask "Worker model  [qwen/qwen3-coder-480b:free]" WORKER_MODEL
-    WORKER_MODEL="${WORKER_MODEL:-qwen/qwen3-coder-480b:free}"
-    ask "Reviewer model [deepseek/deepseek-r1:free]" REVIEWER_MODEL
-    REVIEWER_MODEL="${REVIEWER_MODEL:-deepseek/deepseek-r1:free}"
+    ask "Worker model  [minimax/minimax-m2.7]" WORKER_MODEL
+    WORKER_MODEL="${WORKER_MODEL:-minimax/minimax-m2.7}"
+    ask "Reviewer model [minimax/minimax-m2.7]" REVIEWER_MODEL
+    REVIEWER_MODEL="${REVIEWER_MODEL:-minimax/minimax-m2.7}"
     GEN_MODEL="$WORKER_MODEL"
     OR_BASE_URL="https://openrouter.ai/api/v1"
     ENV_LINES+=(
