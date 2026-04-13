@@ -24,6 +24,7 @@ For each capability, establish:
 - **Observable outcome** — what the user sees or gets
 - **Shell test** — what command + expected output proves it works
 - **Priority** — must / should / nice-to-have
+- For protocol- or transport-facing behavior, probe the network or protocol boundary rather than importing internals
 
 Probe for completeness: "Is there anything else the system must do?"
 
@@ -55,6 +56,7 @@ When writing REQUIREMENTS.md, follow this schema exactly:
 - Never describe implementation (no "uses Redis", "calls function X")
 - Never write Acceptance criteria that require reading source code or logs
 - Every Acceptance must name a concrete observable: a file, an exit code, stdout content, an HTTP status
+- If the user-facing contract is over MCP, JSON-RPC, HTTP, or CLI, phrase Acceptance and Probe hints at that boundary, not as direct in-process method calls
 - Priority "must" = system is broken without it
 - Priority "should" = important but the system still has value without it
 - Priority "nice-to-have" = bonus, low urgency

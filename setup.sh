@@ -658,28 +658,32 @@ echo ""
 echo "  Worker runs the improvement loop. Reviewer writes feedback."
 echo ""
 echo "  Worker engine:"
-echo "    1) codex exec --full-auto   (OpenAI Codex CLI)"
-echo "    2) claude --print           (Claude Code CLI)"
-echo "    3) skip / configure later"
+echo "    1) codex exec --full-auto           (OpenAI Codex CLI — agentic, writes files)"
+echo "    2) claude --print --dangerously-skip-permissions  (Claude Code CLI — agentic, non-interactive)"
+echo "    3) claude --print                    (Claude Code CLI — one-shot, stdout only)"
+echo "    4) skip / configure later"
 echo ""
-ask "Worker engine [1-3]" WORKER_ENGINE_CHOICE
+ask "Worker engine [1-4]" WORKER_ENGINE_CHOICE
 echo ""
 echo "  Reviewer engine:"
-echo "    1) claude --print           (Claude Code CLI)"
-echo "    2) codex exec --full-auto   (OpenAI Codex CLI)"
-echo "    3) skip / configure later"
+echo "    1) claude --print                    (Claude Code CLI — one-shot, stdout only)"
+echo "    2) codex exec --full-auto           (OpenAI Codex CLI — agentic, writes files)"
+echo "    3) claude --dangerously-skip-permissions  (Claude Code CLI — agentic, writes files)"
+echo "    4) skip / configure later"
 echo ""
-ask "Reviewer engine [1-3]" REVIEWER_ENGINE_CHOICE
+ask "Reviewer engine [1-4]" REVIEWER_ENGINE_CHOICE
 
 case "$WORKER_ENGINE_CHOICE" in
   1) WORKER_TOOL="codex"; WORKER_FLAGS="exec --full-auto" ;;
-  2) WORKER_TOOL="claude"; WORKER_FLAGS="--print" ;;
+  2) WORKER_TOOL="claude"; WORKER_FLAGS="--print --dangerously-skip-permissions" ;;
+  3) WORKER_TOOL="claude"; WORKER_FLAGS="--print" ;;
   *) WORKER_TOOL="codex"; WORKER_FLAGS="exec --full-auto" ;;
 esac
 
 case "$REVIEWER_ENGINE_CHOICE" in
   1) REVIEWER_TOOL="claude"; REVIEWER_FLAGS="--print" ;;
   2) REVIEWER_TOOL="codex"; REVIEWER_FLAGS="exec --full-auto" ;;
+  3) REVIEWER_TOOL="claude"; REVIEWER_FLAGS="--dangerously-skip-permissions" ;;
   *) REVIEWER_TOOL="claude"; REVIEWER_FLAGS="--print" ;;
 esac
 

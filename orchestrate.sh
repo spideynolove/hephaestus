@@ -24,18 +24,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # ── Load environment ──────────────────────────────────────────────────────────
 [ -f "$SCRIPT_DIR/.env" ] && source "$SCRIPT_DIR/.env"
 
-# ── Resolve project path ──────────────────────────────────────────────────────
-PROJECT_PATH="${PROJECT_PATH:-$SCRIPT_DIR}"
-PROJECT_PATH="$(realpath "$PROJECT_PATH")"
-PROJECT_NAME="$(basename "$PROJECT_PATH")"
-LOG_DIR="$SCRIPT_DIR/logs/$PROJECT_NAME"
-
-# All file operations (GOAL.md, score.sh, COMMENTs.md, SUMMARY.md, git) happen here
-cd "$PROJECT_PATH"
+# ── Python: PYTHON_PATH env > active venv > known venv > system ──────────────
+if [ -n "${PYTHON_PATH:-}" ]; then
+  PYTHON="$PYTHON_PATH"
+elif [ -n "${VIRTUAL_ENV:-}" ] && [ -x "$VIRTUAL_ENV/bin/python3" ]; then
+  PYTHON="$VIRTUAL_ENV/bin/python3"
+elif [ -x "/home/hung/env/.venv/bin/python3" ]; then
+  PYTHON="/home/hung/env/.venv/bin/python3"
+else
+  PYTHON="python3"
+fi
 
 # ── Parse config.yaml (requires python3 + pyyaml) ────────────────────────────
 _cfg() {
-  python3 -c "
+  "$PYTHON" -c "
 import yaml
 with open('$SCRIPT_DIR/config.yaml') as f:
     d = yaml.safe_load(f)
@@ -70,9 +72,21 @@ while [[ $# -gt 0 ]]; do
     --max-iter) MAX_ITER="$2"; shift 2 ;;
     --target)   TARGET_SCORE="$2"; shift 2 ;;
     --dry-run)  DRY_RUN=true; shift ;;
+    --project)  PROJECT_PATH="$2"; shift 2 ;;
+    --python)   PYTHON="$2"; shift 2 ;;
     *) echo "Unknown arg: $1"; exit 1 ;;
   esac
 done
+
+# ── Resolve project path (after args so --project takes effect) ───────────────
+PROJECT_PATH="${PROJECT_PATH:-$SCRIPT_DIR}"
+PROJECT_PATH="${PROJECT_PATH/#\~/$HOME}"
+PROJECT_PATH="$(realpath "$PROJECT_PATH")"
+PROJECT_NAME="$(basename "$PROJECT_PATH")"
+LOG_DIR="$SCRIPT_DIR/logs/$PROJECT_NAME"
+
+# All file operations (GOAL.md, score.sh, COMMENTs.md, SUMMARY.md, git) happen here
+cd "$PROJECT_PATH"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 log() { echo "[$(date -u +%H:%M:%S)] $*"; }
@@ -112,7 +126,7 @@ update_memory() {
   ts_now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   local trajectory
   trajectory=$(tail -10 "$LOG_DIR/iterations.jsonl" 2>/dev/null \
-    | python3 -c "
+    | "$PYTHON" -c "
 import sys, json
 print('| # | Score | Delta | Result | Action |')
 print('|---|-------|-------|--------|--------|')
@@ -137,7 +151,7 @@ for line in sys.stdin:
   fi
 
   local weakest
-  weakest=$(echo "$score_json" | python3 -c "
+  weakest=$(echo "$score_json" | "$PYTHON" -c "
 import sys, json
 try:
     d = json.loads(sys.stdin.read())
@@ -215,8 +229,8 @@ if ! $DRY_RUN; then
   type "$WORKER_TOOL"   &>/dev/null || log "WARNING: $WORKER_TOOL not found — will fail at runtime if not a shell function"
   type "$REVIEWER_TOOL" &>/dev/null || log "WARNING: $REVIEWER_TOOL not found — will fail at runtime if not a shell function"
 fi
-command -v python3 &>/dev/null || die "python3 required for config parsing."
-if ! python3 -c "import yaml" 2>/dev/null; then
+command -v "$PYTHON" &>/dev/null || "$PYTHON" --version &>/dev/null || die "python3 required for config parsing."
+if ! "$PYTHON" -c "import yaml" 2>/dev/null; then
   log "WARNING: pyyaml not found — using built-in defaults (run install.sh to fix)"
 fi
 
@@ -404,8 +418,13 @@ $(cat COMMENTs.md)"
     log "  [DRY-RUN] Would run: $WORKER_TOOL $WORKER_FLAGS '<prompt>'"
   else
     read -ra _WFLAGS <<< "$WORKER_FLAGS"
-    $WORKER_TOOL "${_WFLAGS[@]}" "$FULL_WORKER_PROMPT" \
-      || { log "Worker exited non-zero — continuing anyway"; }
+    if [[ " ${_WFLAGS[*]} " == *" --print "* ]] || [[ " ${_WFLAGS[*]} " == *" -p "* ]]; then
+      $WORKER_TOOL "${_WFLAGS[@]}" "$FULL_WORKER_PROMPT" > SUMMARY.md \
+        || { log "Worker exited non-zero — continuing anyway"; }
+    else
+      $WORKER_TOOL "${_WFLAGS[@]}" "$FULL_WORKER_PROMPT" \
+        || { log "Worker exited non-zero — continuing anyway"; }
+    fi
   fi
 
   # ── SCORE step ────────────────────────────────────────────────────────────
@@ -435,6 +454,7 @@ STATEOF
 
   # ── Check stopping condition: target reached ──────────────────────────────
   if (( score >= TARGET_SCORE )); then
+    if (( score > best_score )); then best_score=$score; fi
     notify "Target ${TARGET_SCORE} reached! Final score: ${score}. Done in ${iter} iterations."
     exit_code=0
     break

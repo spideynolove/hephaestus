@@ -23,10 +23,13 @@ hr()  { echo ""; echo "───────────────────
 hdr() { hr; echo " $*"; hr; }
 ok()  { echo "  ✓ $*"; }
 err() { echo "  ✗ $*" >&2; }
-ask() { printf "  %s: " "$1"; read -r "$2"; }
+
+# shellcheck source=tui-helpers.sh
+source "$_HEPH_DIR/tui-helpers.sh"
 
 PROJECT_PATH="${1:-}"
 [ -z "$PROJECT_PATH" ] && { err "Usage: req-init.sh <project-path> [--idea \"text\" | --idea-file path]"; exit 1; }
+PROJECT_PATH="${PROJECT_PATH/#\~/$HOME}"
 [ -d "$PROJECT_PATH" ] || { err "Not a directory: $PROJECT_PATH"; exit 1; }
 PROJECT_PATH="$(cd "$PROJECT_PATH" && pwd)"
 PROJECT_NAME="$(basename "$PROJECT_PATH")"
@@ -118,10 +121,7 @@ if [ -n "$IDEA_FILE" ]; then
 fi
 
 if [ -z "$IDEA" ]; then
-  echo "  Describe what you want this project to do."
-  echo "  (Be as rough or detailed as you like — the AI will ask follow-up questions.)"
-  echo ""
-  ask "Your idea" IDEA
+  ask_multiline "Describe what you want this project to do. (As rough or detailed as you like.)" IDEA
 fi
 
 [ -n "$IDEA" ] || { err "No idea provided."; exit 1; }
@@ -156,7 +156,7 @@ PHASE1_OUT=$(ai_run_prompt "$PHASE1_PROMPT") || { err "Phase 1 API call failed."
 echo ""
 echo "$PHASE1_OUT"
 echo ""
-ask "Confirm purpose or clarify" PURPOSE_CONFIRM
+ask_multiline "Confirm purpose, or add clarification" PURPOSE_CONFIRM
 
 hdr "Phase 2 — Requirement Elicitation"
 echo ""
@@ -231,7 +231,7 @@ PHASE3_OUT=$(ai_run_prompt "$PHASE3_PROMPT") || { err "Phase 3 API call failed."
 echo ""
 echo "$PHASE3_OUT"
 echo ""
-ask "Anything to add or change?" COMPLETENESS_FEEDBACK
+ask_multiline "Anything to add or change? (Enter '.' alone to skip)" COMPLETENESS_FEEDBACK
 
 if [ -n "$COMPLETENESS_FEEDBACK" ] && [ "$COMPLETENESS_FEEDBACK" != "no" ] && [ "$COMPLETENESS_FEEDBACK" != "n" ]; then
   echo ""

@@ -25,10 +25,13 @@ hr()  { echo ""; echo "───────────────────
 hdr() { hr; echo " $*"; hr; }
 ok()  { echo "  ✓ $*"; }
 err() { echo "  ✗ $*" >&2; }
-ask() { printf "  %s: " "$1"; read -r "$2"; }
+
+# shellcheck source=tui-helpers.sh
+source "$_HEPH_DIR/tui-helpers.sh"
 
 PROJECT_PATH="${1:-}"
 [ -z "$PROJECT_PATH" ] && { err "Usage: goal-init.sh <project-path>"; exit 1; }
+PROJECT_PATH="${PROJECT_PATH/#\~/$HOME}"
 [ -d "$PROJECT_PATH" ] || { err "Not a directory: $PROJECT_PATH"; exit 1; }
 PROJECT_PATH="$(cd "$PROJECT_PATH" && pwd)"
 PROJECT_NAME="$(basename "$PROJECT_PATH")"
@@ -259,7 +262,7 @@ while true; do
         err "Max refinements (3) reached."
         break
       fi
-      ask "What is wrong? (e.g. 'REQ-002 is actually passing')" GAP_CORRECTION
+      ask_multiline "What is wrong? (e.g. 'REQ-002 is actually passing')" GAP_CORRECTION
       GAP_JSON=$(python3 -c "
 import json, sys, re
 gap = json.loads(sys.argv[1])
@@ -326,7 +329,9 @@ Instructions:
 11. Plain mode (no flag): print one integer to stdout
 12. Breakdown to stderr in both modes
 13. Do NOT include linter/coverage checks unless a REQ explicitly requires them
-14. Write the file directly. Do not explain."
+14. For transport- or API-facing requirements, probe the public interface rather than importing internals. If the Acceptance mentions MCP, JSON-RPC, HTTP, CLI output, exit codes, or structured errors, the probe must spawn the real server/process and assert the observable response at that boundary.
+15. Do NOT satisfy a public-interface REQ by importing Python modules, constructing internal classes, or calling handlers directly unless the Acceptance itself is explicitly library-facing.
+16. Write the file directly. Do not explain."
 
 echo "  How should score.sh be written?"
 echo ""

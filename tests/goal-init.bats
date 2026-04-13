@@ -16,6 +16,16 @@ setup() {
   [ -x goal-init.sh ]
 }
 
+@test "goal-init score prompt requires protocol-level probes for API contracts" {
+  run grep -n "For transport- or API-facing requirements, probe the public interface" goal-init.sh
+  [ "$status" -eq 0 ]
+}
+
+@test "req-system-prompt teaches protocol boundary acceptance criteria" {
+  run grep -n "probe the network or protocol boundary rather than importing internals" req-system-prompt.md
+  [ "$status" -eq 0 ]
+}
+
 @test "goal-init: exits 1 with usage when no args given" {
   run bash goal-init.sh
   [ "$status" -eq 1 ]
