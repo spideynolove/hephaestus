@@ -1,4 +1,5 @@
 docs/
+!docs/superpowers/specs/
 logs/
 .env
 MEMORY.md
