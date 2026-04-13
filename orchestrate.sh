@@ -220,6 +220,14 @@ if ! python3 -c "import yaml" 2>/dev/null; then
   log "WARNING: pyyaml not found — using built-in defaults (run install.sh to fix)"
 fi
 
+# ── REQUIREMENTS.md staleness check ──────────────────────────────────────────
+if [ -f REQUIREMENTS.md ] && [ -f score.sh ]; then
+  if [ REQUIREMENTS.md -nt score.sh ]; then
+    log "WARNING: REQUIREMENTS.md is newer than score.sh — requirements may have changed."
+    log "         Re-run goal-init.sh to regenerate score.sh from updated requirements."
+  fi
+fi
+
 mkdir -p "$LOG_DIR"
 
 # ── Write session metadata ────────────────────────────────────────────────────
@@ -380,6 +388,10 @@ WORKFLOW MEMORY (where we are, what's been tried):
 ${MEMORY_CONTENT}
 
 ---
+REQUIREMENTS (REQUIREMENTS.md):
+$(cat REQUIREMENTS.md 2>/dev/null || echo "(no REQUIREMENTS.md — run req-init.sh then goal-init.sh)")
+
+---
 GOAL (GOAL.md):
 $(cat GOAL.md)
 
@@ -480,6 +492,9 @@ $(cat "$DECISIONS_FILE" 2>/dev/null || echo '(none)')
 WORKFLOW MEMORY:
 $(cat "$MEMORY_FILE" 2>/dev/null || echo '(no memory)')
 
+REQUIREMENTS.md contents:
+$(cat REQUIREMENTS.md 2>/dev/null || echo "(no REQUIREMENTS.md)")
+
 GOAL.md contents:
 $(cat GOAL.md)
 
@@ -487,6 +502,7 @@ SUMMARY.md contents:
 $(cat SUMMARY.md 2>/dev/null || echo '(empty — worker has not written yet)')
 
 Write your feedback to COMMENTs.md. Be specific: name files, line numbers, and exact actions.
+Reference failing REQ IDs from REQUIREMENTS.md in your feedback.
 Include a clear 'Next Priority Action' line for the Worker."
 
   if $DRY_RUN; then
