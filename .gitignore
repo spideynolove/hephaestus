@@ -5,3 +5,4 @@ logs/
 MEMORY.md
 DECISIONS.md
 STATE.sh
+.worktrees/
